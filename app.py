@@ -26,20 +26,28 @@ if st.button("Next"):
 
 # ---- Step 2: payment if valid ----
 if st.session_state["phone_valid"]:
-    amount = st.number_input("Enter payment amount:", min_value=0.0, step=1.0, format="%.2f")
+    amount = st.number_input(
+        "Enter payment amount:",
+        min_value=0.01,      # requires > 0
+        step=0.01,
+        format="%.2f"
+    )
     method = st.selectbox("Payment Method", ["Cash", "Check", "Credit Card"])
 
     if st.button("Submit Payment"):
-        try:
-            storage.save_payment(
-                phone=st.session_state["phone"],
-                amount=float(amount),
-                method=method,
-                ts=datetime.now().isoformat(timespec="seconds"),
-            )
-            st.success(
-                f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']} "
-                f"and pushed to GitHub."
-            )
-        except Exception as e:
-            st.error(f"Failed to save to GitHub: {e}")
+        if amount <= 0:
+            st.error("Amount must be greater than 0.")
+        else:
+            try:
+                storage.save_payment(
+                    phone=st.session_state["phone"],
+                    amount=float(amount),
+                    method=method,
+                    ts=datetime.now().isoformat(timespec="seconds"),
+                )
+                st.success(
+                    f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']} "
+                    f"and pushed to GitHub."
+                )
+            except Exception as e:
+                st.error(f"Failed to save to GitHub: {e}")
