@@ -77,33 +77,39 @@ if st.session_state["phone_valid"]:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
 
-                # Apply 15% birthday discount if within 7 days before birthday
+                # Compute birthday discount (if within 7 days before birthday)
                 final_amount, discount_applied = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
                     ts=ts,
                 )
 
-                # Save discounted payment to GitHub
+                # Save payment to GitHub with detailed amounts
                 storage.save_payment(
                     phone=st.session_state["phone"],
-                    amount=final_amount,
+                    original_amount=float(amount),
+                    discount_applied=discount_applied,
+                    final_amount=final_amount,
                     method=method,
                     ts=ts,
                 )
 
-                # Compute loyalty points (1 point per $1 of final_amount)
-                earned = storage.calculate_points_for_amount(final_amount)
+                # Loyalty points are based on the ORIGINAL amount (pre-discount)
+                earned = storage.calculate_points_for_amount(float(amount))
                 total_points = storage.calculate_total_points(st.session_state["phone"])
 
-                msg = (
-                    f"Recorded ${final_amount:.2f} ({method}) for {st.session_state['phone']} "
-                    f"and pushed to GitHub."
+                # UI messages (show original, discount, and final)
+                # Example: "You paid $17.00 (original $20.00, $3.00 birthday discount)."
+                paid_msg = (
+                    f"You paid ${final_amount:.2f} "
+                    f"(original ${float(amount):.2f}"
+                    f"{', $' + format(discount_applied, '.2f') + ' birthday discount' if discount_applied > 0 else ''})."
                 )
-                if discount_applied > 0:
-                    msg += f" Applied a ${discount_applied:.2f} birthday discount."
-                st.success(msg)
+                st.success(
+                    f"{paid_msg} Recorded and pushed to GitHub."
+                )
 
+                # Example: "Loyalty: earned 20.00 points; total balance: 120.00 points."
                 st.info(
                     f"Loyalty: earned {earned:.2f} points; "
                     f"total balance: {total_points:.2f} points."
@@ -112,15 +118,15 @@ if st.session_state["phone_valid"]:
             except Exception as e:
                 st.error(f"Failed to save to GitHub or compute points: {e}")
 
-# ---- Download payments.xlsx (visible anytime) ----
-excel_bytes = storage.get_payments_file_bytes()
-if excel_bytes:
+# ---- Download customers.xlsx (not payments) ----
+cust_bytes = storage.get_customers_file_bytes()
+if cust_bytes:
     st.download_button(
-        label="Download Payments Excel",
-        data=excel_bytes,
-        file_name="payments.xlsx",
+        label="Download Customers Excel",
+        data=cust_bytes,
+        file_name="customers.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        help="Download the latest payments.xlsx from your GitHub repo"
+        help="Download the latest customers.xlsx from your GitHub repo"
     )
 else:
-    st.caption("No payments file found yet. Submit a payment to create it.")
+    st.caption("No customers file found yet. Add a customer to create it.")
