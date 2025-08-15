@@ -1,5 +1,5 @@
 from deps import st, re, datetime
-import storage
+import storage_github as storage
 
 # ---- session init ----
 if "phone_valid" not in st.session_state:
@@ -7,7 +7,7 @@ if "phone_valid" not in st.session_state:
 if "phone" not in st.session_state:
     st.session_state["phone"] = ""
 
-st.title("💳 Payment Entry")
+st.title("Payment Entry")
 
 # ---- Step 1: phone capture ----
 phone = st.text_input(
@@ -30,21 +30,16 @@ if st.session_state["phone_valid"]:
     method = st.selectbox("Payment Method", ["Cash", "Check", "Credit Card"])
 
     if st.button("Submit Payment"):
-        storage.save_payment(
-            phone=st.session_state["phone"],
-            amount=float(amount),
-            method=method,
-            ts=datetime.now().isoformat(timespec="seconds"),
-        )
-        st.success(f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']}.")
-
-# Allow download of the Excel file
-excel_bytes = storage.get_excel_file()
-if excel_bytes:
-    st.download_button(
-        label="Download Payments Excel",
-        data=excel_bytes,
-        file_name="payments.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-
+        try:
+            storage.save_payment(
+                phone=st.session_state["phone"],
+                amount=float(amount),
+                method=method,
+                ts=datetime.now().isoformat(timespec="seconds"),
+            )
+            st.success(
+                f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']} "
+                f"and pushed to GitHub."
+            )
+        except Exception as e:
+            st.error(f"Failed to save to GitHub: {e}")
