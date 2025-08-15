@@ -1,6 +1,3 @@
-Here’s the full updated **`app.py`** with the birthday date limited to **1960‑01‑01 through today**, 15% **pre‑birthday discount** (within 7 days before birthday), **points = amount after discount**, and **amount > 0** enforced:
-
-```python
 from deps import st, re, datetime
 from datetime import date
 import storage_github as storage
@@ -114,4 +111,3 @@ if st.session_state["phone_valid"]:
 
             except Exception as e:
                 st.error(f"Failed to save to GitHub or compute points: {e}")
-```
