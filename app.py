@@ -37,3 +37,14 @@ if st.session_state["phone_valid"]:
             ts=datetime.now().isoformat(timespec="seconds"),
         )
         st.success(f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']}.")
+
+# Allow download of the Excel file
+excel_bytes = storage.get_excel_file()
+if excel_bytes:
+    st.download_button(
+        label="Download Payments Excel",
+        data=excel_bytes,
+        file_name="payments.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
