@@ -1,4 +1,8 @@
+Here’s the full updated **`app.py`** with the birthday date limited to **1960‑01‑01 through today**, 15% **pre‑birthday discount** (within 7 days before birthday), **points = amount after discount**, and **amount > 0** enforced:
+
+```python
 from deps import st, re, datetime
+from datetime import date
 import storage_github as storage
 
 # ---- session init ----
@@ -26,7 +30,7 @@ if st.button("Next"):
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 
-# ---- Step 1.5: customer profile (birthday) ----
+# ---- Step 1.5: customer profile (birthday only) ----
 customer = None
 if st.session_state["phone_valid"]:
     try:
@@ -36,7 +40,11 @@ if st.session_state["phone_valid"]:
 
     if customer is None:
         st.info("New customer detected. Please add a birthday.")
-        dob = st.date_input("Birthday (required)")
+        dob = st.date_input(
+            "Birthday (required)",
+            min_value=date(1960, 1, 1),
+            max_value=date.today()
+        )
 
         if st.button("Save Profile"):
             if dob is None:
@@ -71,13 +79,15 @@ if st.session_state["phone_valid"]:
         else:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
+
+                # Apply 15% birthday discount if within 7 days before birthday
                 final_amount, discount_applied = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
                     ts=ts,
                 )
 
-                # Save payment to GitHub
+                # Save discounted payment to GitHub
                 storage.save_payment(
                     phone=st.session_state["phone"],
                     amount=final_amount,
@@ -85,18 +95,23 @@ if st.session_state["phone_valid"]:
                     ts=ts,
                 )
 
-                # Compute loyalty points
+                # Compute loyalty points (1 point per $1 of final_amount)
                 earned = storage.calculate_points_for_amount(final_amount)
                 total_points = storage.calculate_total_points(st.session_state["phone"])
 
-                msg = f"Recorded ${final_amount:.2f} ({method}) for {st.session_state['phone']} and pushed to GitHub."
+                msg = (
+                    f"Recorded ${final_amount:.2f} ({method}) for {st.session_state['phone']} "
+                    f"and pushed to GitHub."
+                )
                 if discount_applied > 0:
                     msg += f" Applied a ${discount_applied:.2f} birthday discount."
-
                 st.success(msg)
+
                 st.info(
                     f"Loyalty: earned {earned:.2f} points; "
                     f"total balance: {total_points:.2f} points."
                 )
+
             except Exception as e:
                 st.error(f"Failed to save to GitHub or compute points: {e}")
+```
