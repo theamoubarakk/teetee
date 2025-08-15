@@ -18,9 +18,14 @@ def save_payments(data: dict) -> None:
     with open(PAYMENT_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-def save_payment(phone: str, amount: float, note: str | None = None, ts: str | None = None) -> dict:
+def save_payment(phone: str, amount: float, method: str | None = None, ts: str | None = None) -> dict:
     data = load_payments()
-    entry = {"amount": round(amount, 2), "timestamp": ts, "note": note}
+    entry = {
+        "amount": round(amount, 2),
+        "timestamp": ts,
+        "method": method
+    }
     data.setdefault(phone, []).append(entry)
     save_payments(data)
     return data
+
