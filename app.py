@@ -9,7 +9,7 @@ if "phone" not in st.session_state:
 if "profile_saved" not in st.session_state:
     st.session_state["profile_saved"] = False
 
-st.title("Payment Entry + Loyalty")
+st.title("Payment Entry + Loyalty (Birthday Discount)")
 
 # ---- Step 1: phone capture ----
 phone = st.text_input(
@@ -26,7 +26,7 @@ if st.button("Next"):
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 
-# ---- Step 1.5: customer profile (birthday/anniversary) ----
+# ---- Step 1.5: customer profile (birthday) ----
 customer = None
 if st.session_state["phone_valid"]:
     try:
@@ -35,9 +35,8 @@ if st.session_state["phone_valid"]:
         st.error(f"Failed to load customer profile: {e}")
 
     if customer is None:
-        st.info("New customer detected. Please add a birthday and optionally an anniversary.")
+        st.info("New customer detected. Please add a birthday.")
         dob = st.date_input("Birthday (required)")
-        anniv = st.date_input("Anniversary (optional)", value=None)
 
         if st.button("Save Profile"):
             if dob is None:
@@ -47,7 +46,6 @@ if st.session_state["phone_valid"]:
                     storage.save_or_update_customer(
                         phone=st.session_state["phone"],
                         birthday_iso=dob.isoformat(),
-                        anniversary_iso=(anniv.isoformat() if anniv else None),
                     )
                     st.session_state["profile_saved"] = True
                     st.success("Customer profile saved.")
@@ -55,10 +53,7 @@ if st.session_state["phone_valid"]:
                     st.error(f"Failed to save profile: {e}")
     else:
         # show existing profile (read-only)
-        st.caption(
-            f"Profile → Birthday: {customer.get('birthday','-')}, "
-            f"Anniversary: {customer.get('anniversary','-')}"
-        )
+        st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
 # ---- Step 2: payment if valid ----
 if st.session_state["phone_valid"]:
@@ -76,26 +71,31 @@ if st.session_state["phone_valid"]:
         else:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
-                # Save payment and push to GitHub
-                storage.save_payment(
+                final_amount, discount_applied = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
+                    ts=ts,
+                )
+
+                # Save payment to GitHub
+                storage.save_payment(
+                    phone=st.session_state["phone"],
+                    amount=final_amount,
                     method=method,
                     ts=ts,
                 )
-                # Compute loyalty points for this transaction and total-to-date
-                earned, multiplier = storage.calculate_points_for_amount(
-                    phone=st.session_state["phone"],
-                    amount=float(amount),
-                    ts=ts,
-                )
+
+                # Compute loyalty points
+                earned = storage.calculate_points_for_amount(final_amount)
                 total_points = storage.calculate_total_points(st.session_state["phone"])
 
-                st.success(
-                    f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']} and pushed to GitHub."
-                )
+                msg = f"Recorded ${final_amount:.2f} ({method}) for {st.session_state['phone']} and pushed to GitHub."
+                if discount_applied > 0:
+                    msg += f" Applied a ${discount_applied:.2f} birthday discount."
+
+                st.success(msg)
                 st.info(
-                    f"Loyalty: earned {earned:.2f} points (×{multiplier:.1f}); "
+                    f"Loyalty: earned {earned:.2f} points; "
                     f"total balance: {total_points:.2f} points."
                 )
             except Exception as e:
