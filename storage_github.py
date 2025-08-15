@@ -60,7 +60,7 @@ def _df_from_excel_bytes(b: bytes) -> pd.DataFrame:
 
 # ---------- Customers ----------
 def get_customer(phone: str) -> dict | None:
-    sha, bytes_ = _get_file_info(CUSTOMERS_PATH)
+    _, bytes_ = _get_file_info(CUSTOMERS_PATH)
     if not bytes_:
         return None
     try:
@@ -112,10 +112,18 @@ def save_or_update_customer(phone: str, birthday_iso: str):
             raise
 
 # ---------- Payments ----------
-def save_payment(phone: str, amount: float, method: str, ts: str) -> None:
+def save_payment(phone: str, original_amount: float, discount_applied: float, final_amount: float, method: str, ts: str) -> None:
+    """
+    Append one payment row with full details:
+      - original_amount (pre-discount)
+      - discount_applied
+      - final_amount (charged)
+    """
     new_row = {
         "phone": str(phone),
-        "amount": round(float(amount), 2),
+        "original_amount": round(float(original_amount), 2),
+        "discount_applied": round(float(discount_applied), 2),
+        "final_amount": round(float(final_amount), 2),
         "method": method,
         "timestamp": ts,
     }
@@ -128,9 +136,9 @@ def save_payment(phone: str, amount: float, method: str, ts: str) -> None:
             try:
                 df = _df_from_excel_bytes(bytes_)
             except Exception:
-                df = pd.DataFrame(columns=["phone", "amount", "method", "timestamp"])
+                df = pd.DataFrame(columns=["phone", "original_amount", "discount_applied", "final_amount", "method", "timestamp"])
         else:
-            df = pd.DataFrame(columns=["phone", "amount", "method", "timestamp"])
+            df = pd.DataFrame(columns=["phone", "original_amount", "discount_applied", "final_amount", "method", "timestamp"])
 
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         updated = _excel_bytes_from_df(df)
@@ -163,6 +171,10 @@ def _in_pre_birthday_window(purchase_dt: date, bday: date) -> bool:
     return start_window <= purchase_dt < event_this_year
 
 def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, float]:
+    """
+    Return (final_amount, discount_applied). Discount is 15% if within the 7 days
+    before the customer's birthday. Points are handled separately on original amount.
+    """
     cust = get_customer(phone)
     bday = _parse_iso(cust.get("birthday") if cust else None)
     discount_applied = 0.0
@@ -178,10 +190,14 @@ def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, 
 
     return round(amount, 2), round(discount_applied, 2)
 
-def calculate_points_for_amount(amount: float) -> float:
-    return float(amount) * BASE_POINTS_PER_CURRENCY
+def calculate_points_for_amount(original_amount: float) -> float:
+    """Points are based on the ORIGINAL (pre-discount) amount."""
+    return float(original_amount) * BASE_POINTS_PER_CURRENCY
 
 def calculate_total_points(phone: str) -> float:
+    """
+    Sum points across all payments for this phone based on ORIGINAL amounts.
+    """
     sha, bytes_ = _get_file_info(PAYMENTS_PATH)
     if not bytes_:
         return 0.0
@@ -197,12 +213,16 @@ def calculate_total_points(phone: str) -> float:
     if df.empty:
         return 0.0
 
-    return float(df["amount"].sum() * BASE_POINTS_PER_CURRENCY)
+    # Points = sum(original_amount) * BASE_POINTS_PER_CURRENCY
+    return float(df["original_amount"].sum() * BASE_POINTS_PER_CURRENCY)
 
-# ---------- Download helper for UI ----------
+# ---------- Download helpers ----------
 def get_payments_file_bytes() -> bytes | None:
-    """
-    Return the current payments.xlsx file bytes from GitHub (or None if not found).
-    """
+    """(still available if you ever need it)"""
     _, bytes_ = _get_file_info(PAYMENTS_PATH)
+    return bytes_
+
+def get_customers_file_bytes() -> bytes | None:
+    """Return the current customers.xlsx file bytes from GitHub (or None if not found)."""
+    _, bytes_ = _get_file_info(CUSTOMERS_PATH)
     return bytes_
