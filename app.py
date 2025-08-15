@@ -111,3 +111,16 @@ if st.session_state["phone_valid"]:
 
             except Exception as e:
                 st.error(f"Failed to save to GitHub or compute points: {e}")
+
+# ---- Download payments.xlsx (visible anytime) ----
+excel_bytes = storage.get_payments_file_bytes()
+if excel_bytes:
+    st.download_button(
+        label="Download Payments Excel",
+        data=excel_bytes,
+        file_name="payments.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Download the latest payments.xlsx from your GitHub repo"
+    )
+else:
+    st.caption("No payments file found yet. Submit a payment to create it.")
