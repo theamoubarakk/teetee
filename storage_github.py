@@ -144,7 +144,7 @@ def save_payment(phone: str, amount: float, method: str, ts: str) -> None:
                 continue
             raise
 
-# ---------- Loyalty & Discounts ----------
+# ---------- Loyalty & Birthday Discount ----------
 BASE_POINTS_PER_CURRENCY = 1.0
 WINDOW_DAYS = 7
 DISCOUNT_RATE = 0.15
@@ -198,3 +198,11 @@ def calculate_total_points(phone: str) -> float:
         return 0.0
 
     return float(df["amount"].sum() * BASE_POINTS_PER_CURRENCY)
+
+# ---------- Download helper for UI ----------
+def get_payments_file_bytes() -> bytes | None:
+    """
+    Return the current payments.xlsx file bytes from GitHub (or None if not found).
+    """
+    _, bytes_ = _get_file_info(PAYMENTS_PATH)
+    return bytes_
