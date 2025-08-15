@@ -1,5 +1,5 @@
-from deps import st, re, datetime  # central imports
-import storage                     # our storage helpers
+from deps import st, re, datetime
+import storage
 
 # ---- session init ----
 if "phone_valid" not in st.session_state:
@@ -37,7 +37,3 @@ if st.session_state["phone_valid"]:
             ts=datetime.now().isoformat(timespec="seconds"),
         )
         st.success(f"Recorded ${amount:.2f} ({method}) for {st.session_state['phone']}.")
-
-# ---- Step 3: view data (optional) ----
-with st.expander("Show all payments"):
-    st.json(storage.load_payments())
