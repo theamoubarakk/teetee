@@ -22,15 +22,13 @@ if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        # intentionally no st.success()
+        # (no green box)
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 
 # ---- Step 1.5: customer profile (birthday only) ----
 customer = None
-now_ts = datetime.now().isoformat(timespec="seconds")
-
 if st.session_state["phone_valid"]:
     try:
         customer = storage.get_customer(st.session_state["phone"])
@@ -56,17 +54,18 @@ if st.session_state["phone_valid"]:
                     )
                     storage.update_customer_points(st.session_state["phone"], 0.0)
                     st.session_state["profile_saved"] = True
-                    # no st.success()
+                    # (no green box)
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
+        # Small caption for context
         st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
 # ---- Step 2: payment (auto birthday discount + auto points redemption) ----
 if st.session_state["phone_valid"]:
     amount = st.number_input(
         "Enter payment amount:",
-        min_value=0.01,      # requires > 0
+        min_value=0.01,      # strictly > 0
         step=0.01,
         format="%.2f"
     )
@@ -79,20 +78,20 @@ if st.session_state["phone_valid"]:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
 
-                # 1) Birthday discount (15%) if within 7 days before birthday
+                # 1) 15% birthday discount if within 7 days before birthday
                 after_bday, bday_discount = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
                     ts=ts,
                 )
 
-                # 2) Auto-redeem unexpired points up to payable amount
+                # 2) Auto-redeem unexpired points, up to amount due
                 current_points = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], current_points)
                 points_to_redeem = max(0.0, min(current_points, after_bday))
                 final_amount = round(after_bday - points_to_redeem, 2)
 
-                # 3) Save payment (record full breakdown)
+                # 3) Save payment with full breakdown (Excel in GitHub)
                 storage.save_payment(
                     phone=st.session_state["phone"],
                     original_amount=float(amount),
@@ -103,7 +102,7 @@ if st.session_state["phone_valid"]:
                     ts=ts,
                 )
 
-                # 4) Record redemption (deduct points)
+                # 4) Record redemption (deduct balance)
                 if points_to_redeem > 0:
                     storage.record_redemption(
                         phone=st.session_state["phone"],
@@ -111,20 +110,20 @@ if st.session_state["phone_valid"]:
                         ts=ts,
                     )
 
-                # 5) Points earned on ORIGINAL amount
+                # 5) Points earned on ORIGINAL amount (expiry handled in storage layer)
                 earned = storage.calculate_points_for_amount(float(amount))
 
-                # 6) Recompute balance (with expiry & redemptions) and persist
+                # 6) Recompute balance after expiry & redemption; persist to customers.xlsx
                 new_balance = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # ---- Blue box: exactly two lines
+                # ---- Only the blue box (two lines)
                 st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
             except Exception as e:
                 st.error(f"Failed to process payment: {e}")
 
-# ---- Download customers.xlsx (guarded so secrets missing won't crash app) ----
+# ---- Download customers.xlsx (guarded so missing secrets won't crash) ----
 try:
     cust_bytes = storage.get_customers_file_bytes()
     if cust_bytes:
@@ -137,6 +136,6 @@ try:
         )
     else:
         st.caption("No customers file found yet. Add a customer to create it.")
-except Exception as e:
-    # Most common: Missing GITHUB_TOKEN in Streamlit secrets.
+except Exception:
+    # Commonly: Missing GITHUB_TOKEN or other repo settings.
     st.caption("Download disabled: configure GitHub secrets to enable this button.")
