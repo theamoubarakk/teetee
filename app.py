@@ -22,7 +22,7 @@ if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        # no green success box
+        # intentionally no st.success() to avoid green box
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
@@ -56,11 +56,10 @@ if st.session_state["phone_valid"]:
                     )
                     storage.update_customer_points(st.session_state["phone"], 0.0)
                     st.session_state["profile_saved"] = True
-                    # no green box
+                    # no st.success()
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # keep a small caption for context
         st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
 # ---- Step 2: payment (auto birthday discount + auto points redemption) ----
@@ -119,16 +118,10 @@ if st.session_state["phone_valid"]:
                 new_balance = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # ---- UI (no green success). Single blue box with the two lines you asked for
+                # >>> BLUE BOX: exactly two lines, as requested
                 st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
-                # (Optional tiny caption if you still want an audit trail; otherwise delete this)
-                # st.caption(
-                #     f"Processed payment: final ${final_amount:.2f} "
-                #     f"(original ${float(amount):.2f}"
-                #     f"{', birthday discount $' + format(bday_discount, '.2f') if bday_discount > 0 else ''}"
-                #     f"{', auto-redeemed ' + str(int(points_to_redeem)) + ' points' if points_to_redeem > 0 else ''})."
-                # )
+                # (No st.success, no green box, no extra breakdown)
 
             except Exception as e:
                 st.error(f"Failed to process payment: {e}")
@@ -145,4 +138,3 @@ if cust_bytes:
     )
 else:
     st.caption("No customers file found yet. Add a customer to create it.")
-
