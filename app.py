@@ -22,14 +22,13 @@ if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        # no success box here; keep UI minimal
+        # no green success box
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 
 # ---- Step 1.5: customer profile (birthday only) ----
 customer = None
-available_points = 0.0
 now_ts = datetime.now().isoformat(timespec="seconds")
 
 if st.session_state["phone_valid"]:
@@ -61,16 +60,8 @@ if st.session_state["phone_valid"]:
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # Compute & persist up-to-date points (with 1-year expiry)
-        try:
-            available_points = storage.calculate_total_points(st.session_state["phone"], now_ts)
-            storage.update_customer_points(st.session_state["phone"], available_points)
-        except Exception as e:
-            st.error(f"Failed to compute or update points: {e}")
-        st.caption(
-            f"Profile → Birthday: {customer.get('birthday','-')} | "
-            f"Available Points: {available_points:.2f}"
-        )
+        # keep a small caption for context
+        st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
 # ---- Step 2: payment (auto birthday discount + auto points redemption) ----
 if st.session_state["phone_valid"]:
@@ -128,21 +119,16 @@ if st.session_state["phone_valid"]:
                 new_balance = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # ---- UI (no green box). Show crisp total balance card + subtle breakdown ----
-                st.metric(label="Total Points (current balance)", value=f"{new_balance:.2f}")
+                # ---- UI (no green success). Single blue box with the two lines you asked for
+                st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
-                # Small grey breakdown for audit without clutter
-                parts = [f"original ${float(amount):.2f}"]
-                if bday_discount > 0:
-                    parts.append(f"${bday_discount:.2f} birthday discount")
-                if points_to_redeem > 0:
-                    parts.append(f"auto-redeemed {int(points_to_redeem)} points")
-                breakdown = ", ".join(parts)
-
-                st.caption(
-                    f"Processed: paid ${final_amount:.2f} ({breakdown}). "
-                    f"Earned {earned:.2f} points this purchase. Synced to GitHub."
-                )
+                # (Optional tiny caption if you still want an audit trail; otherwise delete this)
+                # st.caption(
+                #     f"Processed payment: final ${final_amount:.2f} "
+                #     f"(original ${float(amount):.2f}"
+                #     f"{', birthday discount $' + format(bday_discount, '.2f') if bday_discount > 0 else ''}"
+                #     f"{', auto-redeemed ' + str(int(points_to_redeem)) + ' points' if points_to_redeem > 0 else ''})."
+                # )
 
             except Exception as e:
                 st.error(f"Failed to process payment: {e}")
@@ -159,3 +145,4 @@ if cust_bytes:
     )
 else:
     st.caption("No customers file found yet. Add a customer to create it.")
+
