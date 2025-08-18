@@ -10,7 +10,7 @@ if "phone" not in st.session_state:
 if "profile_saved" not in st.session_state:
     st.session_state["profile_saved"] = False
 
-st.title("Payment Entry + Loyalty (Birthday Discount + Points)")
+st.title("Payment Entry + Loyalty (Birthday Discount + Auto-Points)")
 
 # ---- Step 1: phone capture ----
 phone = st.text_input(
@@ -55,17 +55,15 @@ if st.session_state["phone_valid"]:
                         phone=st.session_state["phone"],
                         birthday_iso=dob.isoformat(),
                     )
-                    # Initialize points (0) in customers.xlsx
                     storage.update_customer_points(st.session_state["phone"], 0.0)
                     st.session_state["profile_saved"] = True
                     st.success("Customer profile saved.")
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # Compute & display up-to-date points (with 1-year expiry)
+        # Compute & persist up-to-date points (with 1-year expiry)
         try:
             available_points = storage.calculate_total_points(st.session_state["phone"], now_ts)
-            # Persist the up-to-date balance into customers.xlsx
             storage.update_customer_points(st.session_state["phone"], available_points)
         except Exception as e:
             st.error(f"Failed to compute or update points: {e}")
@@ -74,7 +72,7 @@ if st.session_state["phone_valid"]:
             f"Available Points: {available_points:.2f}"
         )
 
-# ---- Step 2: payment + optional redemption ----
+# ---- Step 2: payment (auto birthday discount + auto points redemption) ----
 if st.session_state["phone_valid"]:
     amount = st.number_input(
         "Enter payment amount:",
@@ -84,17 +82,6 @@ if st.session_state["phone_valid"]:
     )
     method = st.selectbox("Payment Method", ["Cash", "Check", "Credit Card"])
 
-    # Allow redeeming points (whole currency units recommended)
-    # Max you can redeem is the smaller of available_points and the amount (after birthday discount will be applied later;
-    # we still cap the requested redemption to amount to avoid negative final).
-    max_redeem_hint = f"(You can redeem up to {available_points:.0f} points)"
-    redeem_points = st.number_input(
-        f"Use points as discount {max_redeem_hint}",
-        min_value=0.0,
-        step=1.0,
-        value=0.0
-    )
-
     if st.button("Submit Payment"):
         if amount <= 0:
             st.error("Amount must be greater than 0.")
@@ -103,29 +90,25 @@ if st.session_state["phone_valid"]:
                 ts = datetime.now().isoformat(timespec="seconds")
 
                 # 1) Apply 15% birthday discount if within 7 days before birthday
-                final_amount, birthday_discount = storage.apply_birthday_discount(
+                after_bday, bday_discount = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
                     ts=ts,
                 )
 
-                # 2) Cap redemption by available unexpired points and by final_amount
-                #    (points are $1 per point)
+                # 2) Auto-redeem unexpired points up to the payable amount
                 current_points = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], current_points)
-                max_redeem_allowed = max(0.0, min(current_points, final_amount))
-                points_to_redeem = min(float(redeem_points), max_redeem_allowed)
-
-                # Apply redemption to final amount
-                final_after_redemption = round(final_amount - points_to_redeem, 2)
+                points_to_redeem = max(0.0, min(current_points, after_bday))
+                final_amount = round(after_bday - points_to_redeem, 2)
 
                 # 3) Save payment with full breakdown; points are earned on ORIGINAL amount only
                 storage.save_payment(
                     phone=st.session_state["phone"],
                     original_amount=float(amount),
-                    birthday_discount=birthday_discount,
+                    birthday_discount=bday_discount,
                     points_redeemed=points_to_redeem,
-                    final_amount=final_after_redemption,
+                    final_amount=final_amount,
                     method=method,
                     ts=ts,
                 )
@@ -138,23 +121,25 @@ if st.session_state["phone_valid"]:
                         ts=ts,
                     )
 
-                # 5) Earn points from ORIGINAL (pre-discount) amount (expire in 1 year automatically via calc)
+                # 5) Earn points from ORIGINAL amount (expiry handled in balance calc)
                 earned = storage.calculate_points_for_amount(float(amount))
 
-                # 6) Recompute balance (with expiry) and persist to customers.xlsx
+                # 6) Recompute balance (after expiry & redemption) and persist
                 new_balance = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
                 # 7) UI messages
-                msg_main = (
-                    f"You paid ${final_after_redemption:.2f} "
-                    f"(original ${float(amount):.2f}"
-                    f"{', $' + format(birthday_discount, '.2f') + ' birthday discount' if birthday_discount > 0 else ''}"
-                    f"{', used ' + str(int(points_to_redeem)) + ' points' if points_to_redeem > 0 else ''}). "
-                    f"Transaction saved and pushed to GitHub."
-                )
-                st.success(msg_main)
+                # e.g., "You paid $17.00 (original $20.00, $3.00 birthday discount, auto-redeemed 3 points)."
+                parts = [f"original ${float(amount):.2f}"]
+                if bday_discount > 0:
+                    parts.append(f"${bday_discount:.2f} birthday discount")
+                if points_to_redeem > 0:
+                    parts.append(f"auto-redeemed {int(points_to_redeem)} points")
+                breakdown = ", ".join(parts)
 
+                st.success(
+                    f"You paid ${final_amount:.2f} ({breakdown}). Transaction saved and pushed to GitHub."
+                )
                 st.info(
                     f"Loyalty: earned {earned:.2f} points on this purchase; "
                     f"updated balance (after expiry & redemptions): {new_balance:.2f} points."
