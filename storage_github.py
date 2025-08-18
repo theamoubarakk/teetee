@@ -1,27 +1,38 @@
-# storage_github.py
+# storage_github.py  — GitHub + Excel storage for payments, customers, redemptions, vouchers
 import base64
 import io
 import os
 import time
 from datetime import datetime, date, timedelta
 
-import requests
 import pandas as pd
+import requests
 import streamlit as st
 
-# ------------- Config (from Streamlit secrets, fallback to env for local) -------------
-TOKEN = st.secrets.get("GITHUB_TOKEN", os.environ.get("GITHUB_TOKEN"))
-OWNER = st.secrets.get("GITHUB_OWNER", os.environ.get("GITHUB_OWNER", "user"))
-REPO = st.secrets.get("GITHUB_REPO", os.environ.get("GITHUB_REPO", "your-repo-name"))
+# =========================
+# Configuration (from secrets; env fallback for local dev)
+# =========================
+TOKEN  = st.secrets.get("GITHUB_TOKEN",  os.environ.get("GITHUB_TOKEN"))
+OWNER  = st.secrets.get("GITHUB_OWNER",  os.environ.get("GITHUB_OWNER", "user"))
+REPO   = st.secrets.get("GITHUB_REPO",   os.environ.get("GITHUB_REPO", "repo"))
 BRANCH = st.secrets.get("GITHUB_BRANCH", os.environ.get("GITHUB_BRANCH", "main"))
 
-PAYMENTS_PATH = st.secrets.get("GITHUB_FILE_PATH", os.environ.get("GITHUB_FILE_PATH", "payments.xlsx"))
-CUSTOMERS_PATH = st.secrets.get("GITHUB_CUSTOMERS_PATH", os.environ.get("GITHUB_CUSTOMERS_PATH", "customers.xlsx"))
-REDEMPTIONS_PATH = st.secrets.get("GITHUB_REDEMPTIONS_PATH", os.environ.get("GITHUB_REDEMPTIONS_PATH", "redemptions.xlsx"))
+PAYMENTS_PATH     = st.secrets.get("GITHUB_FILE_PATH",        os.environ.get("GITHUB_FILE_PATH", "payments.xlsx"))
+CUSTOMERS_PATH    = st.secrets.get("GITHUB_CUSTOMERS_PATH",   os.environ.get("GITHUB_CUSTOMERS_PATH", "customers.xlsx"))
+REDEMPTIONS_PATH  = st.secrets.get("GITHUB_REDEMPTIONS_PATH", os.environ.get("GITHUB_REDEMPTIONS_PATH", "redemptions.xlsx"))
+VOUCHERS_PATH     = st.secrets.get("GITHUB_VOUCHERS_PATH",    os.environ.get("GITHUB_VOUCHERS_PATH", "vouchers.xlsx"))
 
 API_BASE = "https://api.github.com"
 
-# ------------- GitHub low-level helpers -------------
+# =========================
+# Rewards config (edit tiers here)
+# =========================
+# (points_cost, voucher_amount)
+REWARD_TIERS = [(100, 5), (250, 15), (500, 40)]
+
+# =========================
+# GitHub helpers (Contents API)
+# =========================
 def _headers():
     if not TOKEN:
         raise RuntimeError("Missing GITHUB_TOKEN in Streamlit secrets.")
@@ -35,18 +46,27 @@ def _contents_url(path: str) -> str:
     return f"{API_BASE}/repos/{OWNER}/{REPO}/contents/{path}"
 
 def _get_file_info(path: str):
-    """Return (sha, raw_bytes) for file at path on BRANCH. (None, None) if not found."""
+    """
+    Return (sha, raw_bytes) for file at path on BRANCH.
+    If file not found -> (None, None).
+    """
     r = requests.get(_contents_url(path), headers=_headers(), params={"ref": BRANCH})
     if r.status_code == 200:
         data = r.json()
-        content_bytes = base64.b64decode(data["content"])
-        return data["sha"], content_bytes
+        try:
+            content_bytes = base64.b64decode(data["content"])
+        except Exception:
+            content_bytes = None
+        return data.get("sha"), content_bytes
     if r.status_code == 404:
         return None, None
     raise RuntimeError(f"GitHub GET {path} failed: {r.status_code} {r.text}")
 
 def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None):
-    """Create or update a file via the Contents API, with clear diagnostics."""
+    """
+    Create or update file at path on BRANCH using the Contents API.
+    Raises with helpful hints on failure.
+    """
     payload = {
         "message": message,
         "content": base64.b64encode(content_bytes).decode("utf-8"),
@@ -55,8 +75,7 @@ def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None)
     if sha:
         payload["sha"] = sha
 
-    url = _contents_url(path)
-    r = requests.put(url, headers=_headers(), json=payload)
+    r = requests.put(_contents_url(path), headers=_headers(), json=payload)
     if r.status_code in (200, 201):
         return
 
@@ -71,25 +90,27 @@ def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None)
     elif r.status_code == 422:
         hint.append("422 Unprocessable Entity. Often the branch name does not exist,")
         hint.append("or the provided sha is wrong for updates.")
-        hint.append(f"Check that BRANCH '{BRANCH}' exists and PATH '{path}' is valid.")
+        hint.append(f"Check BRANCH '{BRANCH}' exists and PATH '{path}' is valid.")
     else:
         hint.append(f"GitHub returned {r.status_code}.")
     raise RuntimeError(f"GitHub PUT {path} failed: {r.status_code} {r.text}\n" + "\n".join(hint))
 
 def github_preflight() -> str:
-    """Optional: basic checks for repo and branch. Return '' if OK, otherwise a hint."""
+    """Optional quick checks; return '' if OK, otherwise a human-friendly message."""
     try:
         rr = requests.get(f"{API_BASE}/repos/{OWNER}/{REPO}", headers=_headers())
         if rr.status_code != 200:
-            return f"Cannot access repo {OWNER}/{REPO} (status {rr.status_code}). Check OWNER/REPO and token perms."
+            return f"Cannot access repo {OWNER}/{REPO} (status {rr.status_code})."
         br = requests.get(f"{API_BASE}/repos/{OWNER}/{REPO}/branches/{BRANCH}", headers=_headers())
         if br.status_code != 200:
-            return f"Branch '{BRANCH}' not found (status {br.status_code}). Set GITHUB_BRANCH correctly."
+            return f"Branch '{BRANCH}' not found (status {br.status_code})."
         return ""
     except Exception as e:
         return f"Preflight error: {e}"
 
-# ------------- Excel helpers -------------
+# =========================
+# Excel helpers
+# =========================
 def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
@@ -99,7 +120,9 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
 def _df_from_excel_bytes(b: bytes) -> pd.DataFrame:
     return pd.read_excel(io.BytesIO(b))
 
-# ------------- Customers -------------
+# =========================
+# Customers
+# =========================
 def get_customer(phone: str) -> dict | None:
     _, bytes_ = _get_file_info(CUSTOMERS_PATH)
     if not bytes_:
@@ -137,7 +160,7 @@ def save_or_update_customer(phone: str, birthday_iso: str):
             df["total_points"] = 0.0
 
         phone_str = str(phone)
-        mask = df["phone"].astype(str) == phone_str
+        mask = (df["phone"].astype(str) == phone_str)
         if mask.any():
             df.loc[mask, "birthday"] = birthday_iso
         else:
@@ -201,7 +224,9 @@ def get_customers_file_bytes() -> bytes | None:
     _, bytes_ = _get_file_info(CUSTOMERS_PATH)
     return bytes_
 
-# ------------- Payments -------------
+# =========================
+# Payments
+# =========================
 def save_payment(
     phone: str,
     original_amount: float,
@@ -212,12 +237,7 @@ def save_payment(
     ts: str,
 ) -> None:
     """
-    Append one payment row with full breakdown to payments.xlsx:
-      - original_amount (pre-discount)
-      - birthday_discount
-      - points_redeemed (auto)
-      - final_amount (charged)
-      - method, timestamp
+    Append one payment row to payments.xlsx with full breakdown.
     """
     new_row = {
         "phone": str(phone),
@@ -272,10 +292,12 @@ def get_payments_file_bytes() -> bytes | None:
     _, bytes_ = _get_file_info(PAYMENTS_PATH)
     return bytes_
 
-# ------------- Redemptions (points spent) -------------
+# =========================
+# Redemptions (points spent)
+# =========================
 def record_redemption(phone: str, points: float, ts: str):
     """
-    Append a redemption record (points spent) to redemptions.xlsx.
+    Append a redemption (points spent) to redemptions.xlsx.
     """
     new_row = {"phone": str(phone), "points": round(float(points), 2), "timestamp": ts}
 
@@ -312,11 +334,13 @@ def _load_redemptions_df() -> pd.DataFrame:
     except Exception:
         return pd.DataFrame(columns=["phone", "points", "timestamp"])
 
-# ------------- Loyalty, Expiry & Discount -------------
+# =========================
+# Loyalty: earning, expiry, birthday discount
+# =========================
 BASE_POINTS_PER_CURRENCY = 1.0   # 1 point per 1 currency unit
-WINDOW_DAYS = 7                  # pre-birthday discount window
+WINDOW_DAYS = 7                  # pre-birthday discount window (days before)
 DISCOUNT_RATE = 0.15             # 15% birthday discount
-EXPIRY_DAYS = 365                # points expire 1 year after earning
+EXPIRY_DAYS = 365                # points expire after 1 year
 
 def _parse_iso_date_only(s: str | None) -> date | None:
     if not s:
@@ -340,7 +364,7 @@ def _in_pre_birthday_window(purchase_dt: date, bday: date) -> bool:
 def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, float]:
     """
     Return (final_amount_after_discount, discount_applied).
-    Discount applies if purchase is within 7 days **before** the customer's birthday.
+    Discount applies if purchase is within WINDOW_DAYS **before** birthday.
     """
     cust = get_customer(phone)
     bday = _parse_iso_date_only(cust.get("birthday") if cust else None)
@@ -354,15 +378,15 @@ def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, 
     return round(amount, 2), round(discount_applied, 2)
 
 def calculate_points_for_amount(original_amount: float) -> float:
-    """Points are based on ORIGINAL (pre-discount) amount."""
+    """1 point per $1 on ORIGINAL amount (pre-discount)."""
     return float(original_amount) * BASE_POINTS_PER_CURRENCY
 
 def calculate_total_points(phone: str, ref_ts: str) -> float:
     """
     Compute unexpired points balance at reference timestamp:
       balance = sum(earned within last 365 days) - sum(redeemed within last 365 days)
-      earned  -> ORIGINAL amounts from payments.xlsx
-      redeemed-> points from redemptions.xlsx
+      earned   -> from payments.xlsx (original_amount)
+      redeemed -> from redemptions.xlsx (points)
     """
     ref_date = _parse_ts_to_date(ref_ts)
     cutoff = ref_date - timedelta(days=EXPIRY_DAYS)
@@ -371,7 +395,6 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
     p_df = _load_payments_df()
     if not p_df.empty:
         p_df = p_df[p_df["phone"].astype(str) == str(phone)].copy()
-        # parse timestamp to date
         p_df["date"] = p_df["timestamp"].astype(str).str[:19].apply(_parse_ts_to_date)
         p_df = p_df[p_df["date"] >= cutoff]
         earned = float(p_df.get("original_amount", 0).sum()) * BASE_POINTS_PER_CURRENCY
@@ -390,3 +413,77 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
 
     balance = max(0.0, earned - redeemed)
     return round(balance, 2)
+
+# =========================
+# Vouchers (rewards)
+# =========================
+def _load_vouchers_df() -> pd.DataFrame:
+    _, b = _get_file_info(VOUCHERS_PATH)
+    if not b:
+        return pd.DataFrame(columns=["phone","code","points_cost","amount","issued_ts","redeemed","redeemed_ts"])
+    try:
+        return _df_from_excel_bytes(b)
+    except Exception:
+        return pd.DataFrame(columns=["phone","code","points_cost","amount","issued_ts","redeemed","redeemed_ts"])
+
+def _save_vouchers_df(df: pd.DataFrame):
+    sha, _ = _get_file_info(VOUCHERS_PATH)
+    bytes_ = _excel_bytes_from_df(df)
+    _commit_file(VOUCHERS_PATH, bytes_, "Update vouchers ledger", sha=sha)
+
+def _generate_code(phone: str, points_cost: int, amount: float, ts: str) -> str:
+    last4 = str(phone)[-4:]
+    stamp = datetime.fromisoformat(ts[:19]).strftime("%Y%m%d%H%M%S")
+    return f"V{last4}-{points_cost}-{int(amount)}-{stamp}"
+
+def list_vouchers(phone: str) -> pd.DataFrame:
+    df = _load_vouchers_df()
+    if df.empty:
+        return df
+    return df[df["phone"].astype(str) == str(phone)].sort_values("issued_ts", ascending=False)
+
+def issue_voucher(phone: str, points_cost: int, amount: float) -> str:
+    """
+    Create a voucher for this phone (deducts points immediately via redemptions.xlsx).
+    Returns the voucher code.
+    """
+    ts = datetime.now().isoformat(timespec="seconds")
+
+    # Deduct points first (so balance remains accurate)
+    record_redemption(phone=phone, points=float(points_cost), ts=ts)
+
+    # Append voucher row
+    df = _load_vouchers_df()
+    code = _generate_code(phone, points_cost, amount, ts)
+    row = {
+        "phone": str(phone),
+        "code": code,
+        "points_cost": int(points_cost),
+        "amount": float(amount),
+        "issued_ts": ts,
+        "redeemed": False,
+        "redeemed_ts": None,
+    }
+    df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+    _save_vouchers_df(df)
+    return code
+
+def redeem_voucher(code: str) -> tuple[bool, int]:
+    """
+    Mark a voucher as redeemed by code. Returns (success, points_cost).
+    Points were deducted on issue, so no points math here.
+    """
+    df = _load_vouchers_df()
+    if df.empty:
+        return False, 0
+    mask = (df["code"].astype(str) == str(code))
+    if not mask.any():
+        return False, 0
+    if bool(df.loc[mask].iloc[0].get("redeemed")):
+        return False, 0
+
+    df.loc[mask, "redeemed"] = True
+    df.loc[mask, "redeemed_ts"] = datetime.now().isoformat(timespec="seconds")
+    points_cost = int(df.loc[mask].iloc[0]["points_cost"])
+    _save_vouchers_df(df)
+    return True, points_cost
