@@ -10,7 +10,7 @@ if "phone" not in st.session_state:
 if "profile_saved" not in st.session_state:
     st.session_state["profile_saved"] = False
 
-st.title("Payment Entry + Loyalty (Birthday Discount + Auto-Points)")
+st.title("Payment Entry + Loyalty (Birthday Discount + Points)")
 
 # ---- Step 1: phone capture ----
 phone = st.text_input(
@@ -52,17 +52,14 @@ if st.session_state["phone_valid"]:
                         phone=st.session_state["phone"],
                         birthday_iso=dob.isoformat(),
                     )
-                    # initialize points column for this customer
                     storage.update_customer_points(st.session_state["phone"], 0.0)
                     st.session_state["profile_saved"] = True
-                    # no green box
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # small context only
         st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
-# ---- Step 2: payment (auto birthday discount + auto points redemption) ----
+# ---- Step 2: payment (birthday discount; manual redemption toggle) ----
 if st.session_state["phone_valid"]:
     amount = st.number_input(
         "Enter payment amount:",
@@ -71,6 +68,9 @@ if st.session_state["phone_valid"]:
         format="%.2f"
     )
     method = st.selectbox("Payment Method", ["Cash", "Check", "Credit Card"])
+
+    # NEW: manual redemption toggle (default OFF)
+    redeem_now = st.checkbox("Redeem available points for this purchase", value=False)
 
     if st.button("Submit Payment"):
         if amount <= 0:
@@ -86,13 +86,19 @@ if st.session_state["phone_valid"]:
                     ts=ts,
                 )
 
-                # 2) Get current (unexpired) points, then auto-redeem up to amount due
+                # 2) Current (unexpired) points before this transaction
                 current_points = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], current_points)
-                points_to_redeem = max(0.0, min(current_points, after_bday))
+
+                # 3) Manual redemption (only if box is checked)
+                if redeem_now:
+                    points_to_redeem = max(0.0, min(current_points, after_bday))
+                else:
+                    points_to_redeem = 0.0
+
                 final_amount = round(after_bday - points_to_redeem, 2)
 
-                # 3) Save payment with full breakdown
+                # 4) Save payment with full breakdown
                 storage.save_payment(
                     phone=st.session_state["phone"],
                     original_amount=float(amount),    # points are based on original
@@ -103,7 +109,7 @@ if st.session_state["phone_valid"]:
                     ts=ts,
                 )
 
-                # 4) Record redemption so it’s deducted from balance
+                # 5) Record redemption so it’s deducted from balance
                 if points_to_redeem > 0:
                     storage.record_redemption(
                         phone=st.session_state["phone"],
@@ -111,22 +117,23 @@ if st.session_state["phone_valid"]:
                         ts=ts,
                     )
 
-                # 5) Points earned on ORIGINAL amount
+                # 6) Points earned on ORIGINAL amount
                 earned = storage.calculate_points_for_amount(float(amount))
 
-                # 6) ✅ Compute new balance LOCALLY to avoid GitHub read-after-write lag
+                # 7) ✅ Compute new balance LOCALLY
+                #    Balance = previous valid points - redeemed (if any) + earned now
                 new_balance = max(0.0, current_points - points_to_redeem + earned)
 
                 # Persist the new balance to customers.xlsx
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # ---- Only the blue box (exactly two lines)
+                # ---- Blue box (exactly two lines)
                 st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
             except Exception as e:
                 st.error(f"Failed to process payment: {e}")
 
-# ---- Download customers.xlsx (only if secrets exist; otherwise do nothing) ----
+# ---- Download customers.xlsx (only if secrets exist) ----
 required = ["GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "GITHUB_BRANCH", "GITHUB_CUSTOMERS_PATH"]
 if all(k in st.secrets for k in required):
     try:
@@ -141,6 +148,3 @@ if all(k in st.secrets for k in required):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="Download the latest customers.xlsx (includes total points per phone)"
         )
-else:
-    # Avoid any GitHub call when secrets are missing
-    pass
