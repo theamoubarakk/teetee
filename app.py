@@ -22,7 +22,7 @@ if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        # (no st.success -> no green box)
+        # no success box
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
@@ -52,11 +52,14 @@ if st.session_state["phone_valid"]:
                         phone=st.session_state["phone"],
                         birthday_iso=dob.isoformat(),
                     )
+                    # initialize points column for this customer
                     storage.update_customer_points(st.session_state["phone"], 0.0)
                     st.session_state["profile_saved"] = True
+                    # no green box
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
+        # small context only
         st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
 # ---- Step 2: payment (auto birthday discount + auto points redemption) ----
@@ -76,14 +79,14 @@ if st.session_state["phone_valid"]:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
 
-                # 1) 15% birthday discount if within 7 days before birthday
+                # 1) Apply 15% birthday discount if within 7 days before birthday
                 after_bday, bday_discount = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
                     ts=ts,
                 )
 
-                # 2) Auto-redeem unexpired points, up to amount due
+                # 2) Get current (unexpired) points, then auto-redeem up to amount due
                 current_points = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], current_points)
                 points_to_redeem = max(0.0, min(current_points, after_bday))
@@ -92,7 +95,7 @@ if st.session_state["phone_valid"]:
                 # 3) Save payment with full breakdown
                 storage.save_payment(
                     phone=st.session_state["phone"],
-                    original_amount=float(amount),
+                    original_amount=float(amount),    # points are based on original
                     birthday_discount=bday_discount,
                     points_redeemed=points_to_redeem,
                     final_amount=final_amount,
@@ -100,7 +103,7 @@ if st.session_state["phone_valid"]:
                     ts=ts,
                 )
 
-                # 4) Record redemption (deduct balance)
+                # 4) Record redemption so it’s deducted from balance
                 if points_to_redeem > 0:
                     storage.record_redemption(
                         phone=st.session_state["phone"],
@@ -111,17 +114,19 @@ if st.session_state["phone_valid"]:
                 # 5) Points earned on ORIGINAL amount
                 earned = storage.calculate_points_for_amount(float(amount))
 
-                # 6) Recompute balance (expiry & redemptions) and persist
-                new_balance = storage.calculate_total_points(st.session_state["phone"], ts)
+                # 6) ✅ Compute new balance LOCALLY to avoid GitHub read-after-write lag
+                new_balance = max(0.0, current_points - points_to_redeem + earned)
+
+                # Persist the new balance to customers.xlsx
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # ---- Only the blue box (two lines)
+                # ---- Only the blue box (exactly two lines)
                 st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
             except Exception as e:
                 st.error(f"Failed to process payment: {e}")
 
-# ---- Download customers.xlsx (SAFE: only if secrets exist; otherwise no call) ----
+# ---- Download customers.xlsx (only if secrets exist; otherwise do nothing) ----
 required = ["GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "GITHUB_BRANCH", "GITHUB_CUSTOMERS_PATH"]
 if all(k in st.secrets for k in required):
     try:
@@ -136,7 +141,6 @@ if all(k in st.secrets for k in required):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="Download the latest customers.xlsx (includes total points per phone)"
         )
-    else:
-        st.caption("Customers Excel not available yet.")
 else:
-    st.caption("Download disabled: add GitHub secrets in Streamlit → Settings → Secrets.")
+    # Avoid any GitHub call when secrets are missing
+    pass
