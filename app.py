@@ -2,6 +2,8 @@ from deps import st, re, datetime
 from datetime import date
 import storage_github as storage
 
+st.title("Payment Entry + Loyalty (Points + Rewards)")
+
 # ---- session init ----
 if "phone_valid" not in st.session_state:
     st.session_state["phone_valid"] = False
@@ -10,24 +12,27 @@ if "phone" not in st.session_state:
 if "profile_saved" not in st.session_state:
     st.session_state["profile_saved"] = False
 
-st.title("Payment Entry + Loyalty (Birthday Discount + Points)")
+# ---- Admin mode ----
+admin_mode = st.sidebar.checkbox(
+    "Admin mode",
+    value=True,
+    help="Staff tools: view eligibility, issue vouchers, and manage codes."
+)
 
 # ---- Step 1: phone capture ----
 phone = st.text_input(
     "Enter your phone number (exactly 8 digits):",
     value=st.session_state["phone"]
 )
-
 if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        # no success box
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 
-# ---- Step 1.5: customer profile (birthday only) ----
+# ---- Step 1.5: profile (birthday saved once; used elsewhere if needed) ----
 customer = None
 if st.session_state["phone_valid"]:
     try:
@@ -42,7 +47,6 @@ if st.session_state["phone_valid"]:
             min_value=date(1960, 1, 1),
             max_value=date.today()
         )
-
         if st.button("Save Profile"):
             if dob is None:
                 st.error("Birthday is required.")
@@ -59,18 +63,15 @@ if st.session_state["phone_valid"]:
     else:
         st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
 
-# ---- Step 2: payment (birthday discount; manual redemption toggle) ----
+# ---- Step 2: payment entry (earn points; no auto-redeem) ----
 if st.session_state["phone_valid"]:
     amount = st.number_input(
         "Enter payment amount:",
-        min_value=0.01,      # strictly > 0
+        min_value=0.01,
         step=0.01,
         format="%.2f"
     )
     method = st.selectbox("Payment Method", ["Cash", "Check", "Credit Card"])
-
-    # NEW: manual redemption toggle (default OFF)
-    redeem_now = st.checkbox("Redeem available points for this purchase", value=False)
 
     if st.button("Submit Payment"):
         if amount <= 0:
@@ -79,61 +80,98 @@ if st.session_state["phone_valid"]:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
 
-                # 1) Apply 15% birthday discount if within 7 days before birthday
-                after_bday, bday_discount = storage.apply_birthday_discount(
-                    phone=st.session_state["phone"],
-                    amount=float(amount),
-                    ts=ts,
-                )
-
-                # 2) Current (unexpired) points before this transaction
+                # Current unexpired balance
                 current_points = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], current_points)
 
-                # 3) Manual redemption (only if box is checked)
-                if redeem_now:
-                    points_to_redeem = max(0.0, min(current_points, after_bday))
-                else:
-                    points_to_redeem = 0.0
-
-                final_amount = round(after_bday - points_to_redeem, 2)
-
-                # 4) Save payment with full breakdown
+                # Save payment (earn 1 point per $1 on original amount)
                 storage.save_payment(
                     phone=st.session_state["phone"],
-                    original_amount=float(amount),    # points are based on original
-                    birthday_discount=bday_discount,
-                    points_redeemed=points_to_redeem,
-                    final_amount=final_amount,
+                    original_amount=float(amount),
+                    birthday_discount=0.0,
+                    points_redeemed=0.0,
+                    final_amount=float(amount),
                     method=method,
                     ts=ts,
                 )
 
-                # 5) Record redemption so it’s deducted from balance
-                if points_to_redeem > 0:
-                    storage.record_redemption(
-                        phone=st.session_state["phone"],
-                        points=points_to_redeem,
-                        ts=ts,
-                    )
-
-                # 6) Points earned on ORIGINAL amount
+                # Points earned this purchase
                 earned = storage.calculate_points_for_amount(float(amount))
 
-                # 7) ✅ Compute new balance LOCALLY
-                #    Balance = previous valid points - redeemed (if any) + earned now
-                new_balance = max(0.0, current_points - points_to_redeem + earned)
-
-                # Persist the new balance to customers.xlsx
+                # Local balance update (avoid GitHub read-after-write lag)
+                new_balance = current_points + earned
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # ---- Blue box (exactly two lines)
+                # Minimal blue box
                 st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
             except Exception as e:
                 st.error(f"Failed to process payment: {e}")
 
-# ---- Download customers.xlsx (only if secrets exist) ----
+# ---- Rewards (Admin) ----
+if st.session_state.get("phone_valid") and admin_mode:
+    st.subheader("Rewards (Admin)")
+
+    # Latest balance
+    try:
+        ts = datetime.now().isoformat(timespec="seconds")
+        balance = storage.calculate_total_points(st.session_state["phone"], ts)
+        storage.update_customer_points(st.session_state["phone"], balance)
+    except Exception as e:
+        st.error(f"Failed to compute balance: {e}")
+        balance = 0.0
+
+    st.write(f"**Current balance:** {balance:.2f} points")
+
+    # Eligibility + issue buttons
+    with st.expander("Issue Voucher"):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Tiers (1 point = $1):")
+            for cost, cash in storage.REWARD_TIERS:
+                eligible = balance >= cost
+                st.write(("✅ " if eligible else "❌ ") + f"{cost} points → ${cash} voucher")
+        with c2:
+            st.caption("Actions:")
+            for cost, cash in storage.REWARD_TIERS:
+                eligible = balance >= cost
+                if st.button(f"Issue ${cash} (cost {cost} pts)", disabled=not eligible, key=f"issue_{cost}"):
+                    try:
+                        code = storage.issue_voucher(
+                            phone=st.session_state["phone"],
+                            points_cost=cost,
+                            amount=cash,
+                        )
+                        balance = max(0.0, balance - cost)
+                        storage.update_customer_points(st.session_state["phone"], balance)
+                        st.info(f"Issued voucher {code} for ${cash}. New balance: {balance:.2f} pts.")
+                    except Exception as e:
+                        st.error(f"Failed to issue voucher: {e}")
+
+    # Voucher list + redeem
+    with st.expander("Vouchers for this customer"):
+        try:
+            vdf = storage.list_vouchers(st.session_state["phone"])
+        except Exception as e:
+            vdf = None
+            st.error(f"Failed to load vouchers: {e}")
+
+        if vdf is None or vdf.empty:
+            st.caption("No vouchers yet.")
+        else:
+            st.dataframe(vdf)
+            code_to_redeem = st.text_input("Enter voucher code to mark as redeemed")
+            if st.button("Mark Redeemed"):
+                try:
+                    ok, _ = storage.redeem_voucher(code_to_redeem)
+                    if ok:
+                        st.info(f"Voucher {code_to_redeem} marked redeemed.")
+                    else:
+                        st.error("Voucher code not found or already redeemed.")
+                except Exception as e:
+                    st.error(f"Failed to redeem voucher: {e}")
+
+# ---- Download customers.xlsx (guarded; won’t crash if secrets missing) ----
 required = ["GITHUB_TOKEN", "GITHUB_OWNER", "GITHUB_REPO", "GITHUB_BRANCH", "GITHUB_CUSTOMERS_PATH"]
 if all(k in st.secrets for k in required):
     try:
