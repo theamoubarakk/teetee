@@ -22,7 +22,7 @@ if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        st.success("Phone number accepted.")
+        # no success box here; keep UI minimal
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
@@ -57,7 +57,7 @@ if st.session_state["phone_valid"]:
                     )
                     storage.update_customer_points(st.session_state["phone"], 0.0)
                     st.session_state["profile_saved"] = True
-                    st.success("Customer profile saved.")
+                    # no green box
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
@@ -128,8 +128,10 @@ if st.session_state["phone_valid"]:
                 new_balance = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # 7) UI messages
-                # e.g., "You paid $17.00 (original $20.00, $3.00 birthday discount, auto-redeemed 3 points)."
+                # ---- UI (no green box). Show crisp total balance card + subtle breakdown ----
+                st.metric(label="Total Points (current balance)", value=f"{new_balance:.2f}")
+
+                # Small grey breakdown for audit without clutter
                 parts = [f"original ${float(amount):.2f}"]
                 if bday_discount > 0:
                     parts.append(f"${bday_discount:.2f} birthday discount")
@@ -137,12 +139,9 @@ if st.session_state["phone_valid"]:
                     parts.append(f"auto-redeemed {int(points_to_redeem)} points")
                 breakdown = ", ".join(parts)
 
-                st.success(
-                    f"You paid ${final_amount:.2f} ({breakdown}). Transaction saved and pushed to GitHub."
-                )
-                st.info(
-                    f"Loyalty: earned {earned:.2f} points on this purchase; "
-                    f"updated balance (after expiry & redemptions): {new_balance:.2f} points."
+                st.caption(
+                    f"Processed: paid ${final_amount:.2f} ({breakdown}). "
+                    f"Earned {earned:.2f} points this purchase. Synced to GitHub."
                 )
 
             except Exception as e:
@@ -160,4 +159,3 @@ if cust_bytes:
     )
 else:
     st.caption("No customers file found yet. Add a customer to create it.")
-
