@@ -44,18 +44,14 @@ if not st.session_state["phone_valid"]:
             st.session_state["phone_valid"] = False
             st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 else:
-    # Compact header showing the locked-in phone and a way to change it
-    col_p1, col_p2 = st.columns([1, 0.25])
-    with col_p1:
-        st.caption(f"Phone: **{st.session_state['phone']}**")
-    with col_p2:
-        if st.button("Change number"):
-            # reset state so the phone input shows again
-            st.session_state["phone_valid"] = False
-            st.session_state["edit_birthday"] = False
-            st.session_state["just_saved_phone"] = None
-            st.session_state["just_saved_birthday"] = None
-            st.rerun()
+    # Stacked format: caption line + separate button below
+    st.caption(f"Phone number: **{st.session_state['phone']}**")
+    if st.button("Change number"):
+        st.session_state["phone_valid"] = False
+        st.session_state["edit_birthday"] = False
+        st.session_state["just_saved_phone"] = None
+        st.session_state["just_saved_birthday"] = None
+        st.rerun()
 
 # =========================
 # Step 1.5: profile (set or edit birthday)
@@ -102,11 +98,9 @@ if st.session_state["phone_valid"]:
         st.caption(f"Profile → Birthday: {_fmt_birthday(effective_bday_iso)}")
 
         # Optional: allow editing via button
-        col_a, _ = st.columns([1, 1])
-        with col_a:
-            if not st.session_state["edit_birthday"]:
-                if st.button("Edit Birthday"):
-                    st.session_state["edit_birthday"] = True
+        if not st.session_state["edit_birthday"]:
+            if st.button("Edit Birthday"):
+                st.session_state["edit_birthday"] = True
 
         if st.session_state["edit_birthday"]:
             default_date = _iso_to_date_or_none(effective_bday_iso) or date(2000, 1, 1)
