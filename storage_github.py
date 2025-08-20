@@ -96,7 +96,54 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 def _df_from_excel_bytes(b: bytes) -> pd.DataFrame:
-    return pd.read_excel(io.BytesIO(b))
+    # Keep empty cells as "" instead of NaN/NaT
+    return pd.read_excel(io.BytesIO(b), keep_default_na=False)
+
+# =========================
+# Birthday normalization helpers (fix NaN)
+# =========================
+def _normalize_birthday_in(value) -> str:
+    """
+    Accepts date/datetime/str/None and returns ISO 'YYYY-MM-DD' or ''.
+    Never returns 'nan'.
+    """
+    if value in (None, "", "nan", "NaN"):
+        return ""
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+
+    v = str(value).strip()
+    if not v or v.lower() == "nan":
+        return ""
+
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(v, fmt).date().isoformat()
+        except ValueError:
+            continue
+    return ""  # fallback safe empty
+
+def _normalize_birthday_out(value) -> str | None:
+    """
+    Value from Excel -> None or ISO 'YYYY-MM-DD'.
+    Filters out '', 'nan', bad strings, and invalid dates.
+    """
+    if value in (None, "", "nan", "NaN"):
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+
+    v = str(value).strip()
+    if not v or v.lower() == "nan":
+        return None
+    try:
+        return datetime.strptime(v[:10], "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return None
 
 # =========================
 # Customers
@@ -115,13 +162,19 @@ def get_customer(phone: str) -> dict | None:
     if row.empty:
         return None
     r = row.iloc[0]
+
+    birthday_clean = _normalize_birthday_out(r.get("birthday", None))
+    total_pts_raw = r.get("total_points", 0)
+
     return {
         "phone": str(r.get("phone", "")),
-        "birthday": r.get("birthday", None),
-        "total_points": float(r.get("total_points", 0) or 0),
+        "birthday": birthday_clean,                 # ← never 'nan'
+        "total_points": float(total_pts_raw or 0),  # safe cast
     }
 
 def save_or_update_customer(phone: str, birthday_iso: str):
+    birthday_iso = _normalize_birthday_in(birthday_iso)  # ← normalize first
+
     attempts = 0
     while True:
         attempts += 1
@@ -140,10 +193,14 @@ def save_or_update_customer(phone: str, birthday_iso: str):
         phone_str = str(phone)
         mask = (df["phone"].astype(str) == phone_str)
         if mask.any():
-            df.loc[mask, "birthday"] = birthday_iso
+            df.loc[mask, "birthday"] = birthday_iso or ""    # ← empty, not NaN
         else:
             df = pd.concat(
-                [df, pd.DataFrame([{"phone": phone_str, "birthday": birthday_iso, "total_points": 0.0}])],
+                [df, pd.DataFrame([{
+                    "phone": phone_str,
+                    "birthday": birthday_iso or "",           # ← empty, not NaN
+                    "total_points": 0.0
+                }])],
                 ignore_index=True
             )
 
@@ -182,7 +239,7 @@ def update_customer_points(phone: str, total_points: float):
         else:
             df = pd.concat([df, pd.DataFrame([{
                 "phone": phone_str,
-                "birthday": None,
+                "birthday": "",                 # ← keep empty to avoid NaN
                 "total_points": float(total_points)
             }])], ignore_index=True)
 
