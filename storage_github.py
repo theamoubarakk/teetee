@@ -86,7 +86,6 @@ def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None)
         hint.append("422 — branch may not exist, or SHA mismatch for update.")
         hint.append(f"Check branch '{BRANCH}' exists and path '{path}' is correct.")
 
-    # robust single f-string (avoid accidental str + int concatenation)
     raise RuntimeError(f"GitHub PUT {path} failed: {r.status_code} {r.text}\n" + "\n".join(map(str, hint)))
 
 # =========================
@@ -171,12 +170,12 @@ def get_customer(phone: str) -> dict | None:
 
     return {
         "phone": str(r.get("phone", "")),
-        "birthday": birthday_clean,                 # ← never 'nan'
-        "total_points": float(total_pts_raw or 0),  # safe cast
+        "birthday": birthday_clean,                 # never 'nan'
+        "total_points": float(total_pts_raw or 0),
     }
 
 def save_or_update_customer(phone: str, birthday_iso: str):
-    birthday_iso = _normalize_birthday_in(birthday_iso)  # ← normalize first
+    birthday_iso = _normalize_birthday_in(birthday_iso)
 
     attempts = 0
     while True:
@@ -196,12 +195,12 @@ def save_or_update_customer(phone: str, birthday_iso: str):
         phone_str = str(phone)
         mask = (df["phone"].astype(str) == phone_str)
         if mask.any():
-            df.loc[mask, "birthday"] = birthday_iso or ""    # ← empty, not NaN
+            df.loc[mask, "birthday"] = birthday_iso or ""
         else:
             df = pd.concat(
                 [df, pd.DataFrame([{
                     "phone": phone_str,
-                    "birthday": birthday_iso or "",           # ← empty, not NaN
+                    "birthday": birthday_iso or "",
                     "total_points": 0.0
                 }])],
                 ignore_index=True
@@ -242,7 +241,7 @@ def update_customer_points(phone: str, total_points: float):
         else:
             df = pd.concat([df, pd.DataFrame([{
                 "phone": phone_str,
-                "birthday": "",                 # ← keep empty to avoid NaN
+                "birthday": "",
                 "total_points": float(total_points)
             }])], ignore_index=True)
 
@@ -267,8 +266,8 @@ def save_payment(
     phone: str,
     original_amount: float,
     birthday_discount: float,
-    reward_discount: float,       # NEW: cash discount from reward tier
-    points_redeemed: float,       # points spent to obtain reward
+    reward_discount: float,
+    points_redeemed: float,
     final_amount: float,
     method: str,
     ts: str,
@@ -278,7 +277,7 @@ def save_payment(
         "phone": str(phone),
         "original_amount": round(float(original_amount), 2),
         "birthday_discount": round(float(birthday_discount), 2),
-        "reward_discount": round(float(reward_discount), 2),  # NEW
+        "reward_discount": round(float(reward_discount), 2),
         "points_redeemed": round(float(points_redeemed), 2),
         "final_amount": round(float(final_amount), 2),
         "method": method,
@@ -305,7 +304,6 @@ def save_payment(
                 "final_amount", "method", "timestamp"
             ])
 
-        # ensure new column exists for older files
         if "reward_discount" not in df.columns:
             df["reward_discount"] = 0.0
 
@@ -386,10 +384,7 @@ def _parse_iso_date_only(s: str | None) -> date | None:
         return None
 
 def _parse_ts_to_date(ts) -> date:
-    """
-    Accepts ISO string 'YYYY-MM-DDTHH:MM:SS', datetime/date, or anything castable to str.
-    Always returns a date, defaulting to today on failure.
-    """
+    """Accepts ISO string/datetime/date; returns a date, defaulting to today on failure."""
     try:
         if isinstance(ts, datetime):
             return ts.date()
@@ -488,7 +483,7 @@ def _reset_excel(path: str, columns: list[str]) -> None:
     """Overwrite an Excel file with an empty sheet that keeps the provided headers."""
     df = pd.DataFrame(columns=columns)
     content = _excel_bytes_from_df(df)
-    sha, _ = _get_file_info(path)  # may be (None, None) if file doesn't exist yet
+    sha, _ = _get_file_info(path)
     _commit_file(path, content, f"Reset {os.path.basename(path)} (clear all data)", sha=sha)
 
 def clear_all_data(include_vouchers: bool = True) -> dict:
