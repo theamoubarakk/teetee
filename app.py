@@ -43,22 +43,32 @@ if st.button("Next"):
 # ---- Step 1.5: profile (set or edit birthday) ----
 customer = None
 if st.session_state["phone_valid"]:
+    phone_id = st.session_state["phone"]
+
+    # Try to load from GitHub
     try:
-        customer = storage.get_customer(st.session_state["phone"])
+        customer = storage.get_customer(phone_id)
     except Exception as e:
         st.error(f"Failed to load customer profile: {e}")
 
-    phone_id = st.session_state["phone"]
-
     # If GitHub hasn't propagated yet, fall back to optimistic cache
-    cached_bday = None
-    if st.session_state["just_saved_phone"] == phone_id:
-        cached_bday = st.session_state["just_saved_birthday"]
+    cached_bday = st.session_state["just_saved_birthday"] if st.session_state["just_saved_phone"] == phone_id else None
 
-    if customer is None:
-        # New customer → set birthday and persist immediately
+    # Unified "effective" view of birthday (cache wins if present)
+    effective_bday_iso = cached_bday or (customer.get("birthday") if customer else None)
+
+    # Decide whether this is truly a brand‑new customer (no cached birthday either)
+    is_really_new = (customer is None) and (cached_bday is None)
+
+    if is_really_new:
+        # Brand-new → show creation form and persist immediately
         st.info("New customer detected. Please add a birthday.")
-        dob = st.date_input("Birthday (required)", min_value=date(1960, 1, 1), max_value=date.today(), key="new_bday")
+        dob = st.date_input(
+            "Birthday (required)",
+            min_value=date(1960, 1, 1),
+            max_value=date.today(),
+            key="new_bday"
+        )
         if st.button("Save Profile"):
             if dob is None:
                 st.error("Birthday is required.")
@@ -74,24 +84,30 @@ if st.session_state["phone_valid"]:
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # Prefer the freshly saved birthday if cache exists, otherwise use file value
-        current_bday_iso = cached_bday or customer.get("birthday")
-        st.caption(f"Profile → Birthday: {_fmt_birthday(current_bday_iso)}")
+        # We have an effective birthday (from GitHub or cache) → show as existing profile
+        st.caption(f"Profile → Birthday: {_fmt_birthday(effective_bday_iso)}")
 
-        if not current_bday_iso and not st.session_state["edit_birthday"]:
+        # If missing (edge case), open editor by default
+        if not effective_bday_iso and not st.session_state["edit_birthday"]:
             st.warning("No birthday saved yet for this customer.")
             st.session_state["edit_birthday"] = True
 
-        col_a, col_b = st.columns([1,1])
+        # Edit controls
+        col_a, _ = st.columns([1,1])
         with col_a:
             if not st.session_state["edit_birthday"]:
                 if st.button("Edit Birthday"):
                     st.session_state["edit_birthday"] = True
 
         if st.session_state["edit_birthday"]:
-            default_date = _iso_to_date_or_none(current_bday_iso) or date(2000, 1, 1)
-            new_dob = st.date_input("Set/Update Birthday", value=default_date,
-                                    min_value=date(1960, 1, 1), max_value=date.today(), key="edit_bday")
+            default_date = _iso_to_date_or_none(effective_bday_iso) or date(2000, 1, 1)
+            new_dob = st.date_input(
+                "Set/Update Birthday",
+                value=default_date,
+                min_value=date(1960, 1, 1),
+                max_value=date.today(),
+                key="edit_bday"
+            )
             c1, c2 = st.columns([1,1])
             with c1:
                 if st.button("Save Birthday"):
