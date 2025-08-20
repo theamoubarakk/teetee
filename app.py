@@ -4,7 +4,7 @@ import storage_github as storage
 
 st.title("Payment Entry + Loyalty (Points + Reward Discount)")
 
-# ---- tiny helper to format birthday safely (never shows 'nan') ----
+# ---- helpers ----
 def _fmt_birthday(value):
     if not value:
         return "—"
@@ -148,7 +148,7 @@ if st.session_state["phone_valid"]:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
 
-                # 1) Birthday discount first (15% within 7 days before birthday)
+                # 1) Birthday discount first
                 after_bday, bday_discount = storage.apply_birthday_discount(
                     phone=st.session_state["phone"],
                     amount=float(amount),
@@ -194,7 +194,14 @@ if st.session_state["phone_valid"]:
                 new_balance = max(0.0, current_points - points_spent_for_reward + earned)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
-                # 8) Minimal blue box (exactly two lines)
+                # 8) Show discounts & amount due clearly
+                st.caption(
+                    f"Birthday discount: {bday_discount:.2f} | "
+                    f"Reward discount: {reward_discount:.2f} | "
+                    f"Amount due: {amount_due:.2f}"
+                )
+
+                # 9) Minimal blue box (exactly two lines)
                 st.info(f"earned points: {earned:.2f}\n\ntotal points: {new_balance:.2f}")
 
             except Exception as e:
