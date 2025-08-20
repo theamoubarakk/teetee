@@ -27,11 +27,11 @@ API_BASE = "https://api.github.com"
 REWARD_TIERS = [(100, 5), (250, 15), (500, 40)]
 
 # Loyalty config
-BASE_POINTS_PER_CURRENCY = 1.0  # 1 point per 1 currency unit
+BASE_POINTS_PER_CURRENCY = 1.0   # 1 point per 1 currency unit
 WINDOW_DAYS = 7                  # days BEFORE birthday
-BIRTHDAY_POST_WINDOW_DAYS = 7    # days AFTER birthday (new)
-DISCOUNT_RATE = 0.15              # 15% birthday discount
-EXPIRY_DAYS = 365                 # points expire after 1 year
+BIRTHDAY_POST_WINDOW_DAYS = 7    # days AFTER birthday
+DISCOUNT_RATE = 0.15             # 15% birthday discount
+EXPIRY_DAYS = 365                # points expire after 1 year
 
 # =========================
 # GitHub helpers
@@ -480,3 +480,57 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
 
     balance = max(0.0, earned - redeemed)
     return round(balance, 2)
+
+# =========================
+# Admin: clear all Excel data (keep headers)
+# =========================
+def _reset_excel(path: str, columns: list[str]) -> None:
+    """Overwrite an Excel file with an empty sheet that keeps the provided headers."""
+    df = pd.DataFrame(columns=columns)
+    content = _excel_bytes_from_df(df)
+    sha, _ = _get_file_info(path)  # may be (None, None) if file doesn't exist yet
+    _commit_file(path, content, f"Reset {os.path.basename(path)} (clear all data)", sha=sha)
+
+def clear_all_data(include_vouchers: bool = True) -> dict:
+    """
+    Clear payments.xlsx, customers.xlsx, redemptions.xlsx (and vouchers.xlsx if present).
+    Returns a dict of file -> 'ok'/'error:...'.
+    """
+    results = {}
+
+    # customers.xlsx
+    try:
+        _reset_excel(CUSTOMERS_PATH, ["phone", "birthday", "total_points"])
+        results[os.path.basename(CUSTOMERS_PATH)] = "ok"
+    except Exception as e:
+        results[os.path.basename(CUSTOMERS_PATH)] = f"error: {e}"
+
+    # payments.xlsx
+    try:
+        _reset_excel(
+            PAYMENTS_PATH,
+            ["phone", "original_amount", "birthday_discount",
+             "reward_discount", "points_redeemed", "final_amount",
+             "method", "timestamp"]
+        )
+        results[os.path.basename(PAYMENTS_PATH)] = "ok"
+    except Exception as e:
+        results[os.path.basename(PAYMENTS_PATH)] = f"error: {e}"
+
+    # redemptions.xlsx
+    try:
+        _reset_excel(REDEMPTIONS_PATH, ["phone", "points", "timestamp"])
+        results[os.path.basename(REDEMPTIONS_PATH)] = "ok"
+    except Exception as e:
+        results[os.path.basename(REDEMPTIONS_PATH)] = f"error: {e}"
+
+    # vouchers.xlsx (optional)
+    if include_vouchers:
+        vouchers_path = st.secrets.get("GITHUB_VOUCHERS_PATH", os.environ.get("GITHUB_VOUCHERS_PATH", "vouchers.xlsx"))
+        try:
+            _reset_excel(vouchers_path, ["voucher_code", "phone", "value", "issued_ts", "redeemed_ts"])
+            results[os.path.basename(vouchers_path)] = "ok"
+        except Exception as e:
+            results[os.path.basename(vouchers_path)] = f"error: {e}"
+
+    return results
