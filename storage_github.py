@@ -27,11 +27,11 @@ API_BASE = "https://api.github.com"
 REWARD_TIERS = [(100, 5), (250, 15), (500, 40)]
 
 # Loyalty config
-BASE_POINTS_PER_CURRENCY = 1.0   # 1 point per 1 currency unit
-WINDOW_DAYS = 7                  # days BEFORE birthday
-BIRTHDAY_POST_WINDOW_DAYS = 7    # days AFTER birthday
-DISCOUNT_RATE = 0.15             # 15% birthday discount
-EXPIRY_DAYS = 365                # points expire after 1 year
+BASE_POINTS_PER_CURRENCY = 1.0
+WINDOW_DAYS = 7
+BIRTHDAY_POST_WINDOW_DAYS = 7
+DISCOUNT_RATE = 0.15
+EXPIRY_DAYS = 365
 
 # =========================
 # GitHub helpers
@@ -49,7 +49,6 @@ def _contents_url(path: str) -> str:
     return f"{API_BASE}/repos/{OWNER}/{REPO}/contents/{path}"
 
 def _get_file_info(path: str):
-    """Return (sha, raw_bytes) for file at path on BRANCH. (None, None) if not found."""
     r = requests.get(_contents_url(path), headers=_headers(), params={"ref": BRANCH})
     if r.status_code == 200:
         data = r.json()
@@ -63,7 +62,6 @@ def _get_file_info(path: str):
     raise RuntimeError(f"GitHub GET {path} failed: {r.status_code} {r.text}")
 
 def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None):
-    """Create or update file via the Contents API, with clear diagnostics."""
     payload = {
         "message": message,
         "content": base64.b64encode(content_bytes).decode("utf-8"),
@@ -71,12 +69,9 @@ def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None)
     }
     if sha:
         payload["sha"] = sha
-
     r = requests.put(_contents_url(path), headers=_headers(), json=payload)
     if r.status_code in (200, 201):
         return
-
-    # Diagnostics
     hint = []
     if r.status_code == 404:
         hint.append("404 Not Found — token lacks repo/branch access or OWNER/REPO/BRANCH incorrect.")
@@ -85,7 +80,6 @@ def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None)
     elif r.status_code == 422:
         hint.append("422 — branch may not exist, or SHA mismatch for update.")
         hint.append(f"Check branch '{BRANCH}' exists and path '{path}' is correct.")
-
     raise RuntimeError(f"GitHub PUT {path} failed: {r.status_code} {r.text}\n" + "\n".join(map(str, hint)))
 
 # =========================
@@ -98,47 +92,35 @@ def _excel_bytes_from_df(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 def _df_from_excel_bytes(b: bytes) -> pd.DataFrame:
-    # Keep empty cells as "" instead of NaN/NaT
     return pd.read_excel(io.BytesIO(b), keep_default_na=False)
 
 # =========================
-# Birthday normalization helpers (fix NaN)
+# Birthday normalization helpers
 # =========================
 def _normalize_birthday_in(value) -> str:
-    """
-    Accepts date/datetime/str/None and returns ISO 'YYYY-MM-DD' or ''.
-    Never returns 'nan'.
-    """
     if value in (None, "", "nan", "NaN"):
         return ""
     if isinstance(value, date) and not isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, datetime):
         return value.date().isoformat()
-
     v = str(value).strip()
     if not v or v.lower() == "nan":
         return ""
-
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d.%m.%Y"):
         try:
             return datetime.strptime(v, fmt).date().isoformat()
         except ValueError:
             continue
-    return ""  # fallback safe empty
+    return ""
 
 def _normalize_birthday_out(value) -> str | None:
-    """
-    Value from Excel -> None or ISO 'YYYY-MM-DD'.
-    Filters out '', 'nan', bad strings, and invalid dates.
-    """
     if value in (None, "", "nan", "NaN"):
         return None
     if isinstance(value, date) and not isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, datetime):
         return value.date().isoformat()
-
     v = str(value).strip()
     if not v or v.lower() == "nan":
         return None
@@ -151,32 +133,43 @@ def _normalize_birthday_out(value) -> str | None:
 # Customers
 # =========================
 def get_customer(phone: str) -> dict | None:
-    _, bytes_ = _get_file_info(CUSTOMERS_PATH)
-    if not bytes_:
-        return None
-    try:
-        df = _df_from_excel_bytes(bytes_)
-    except Exception:
-        return None
-    if "phone" not in df.columns:
-        return None
-    row = df[df["phone"].astype(str) == str(phone)]
-    if row.empty:
-        return None
-    r = row.iloc[0]
-
-    birthday_clean = _normalize_birthday_out(r.get("birthday", None))
-    total_pts_raw = r.get("total_points", 0)
-
-    return {
-        "phone": str(r.get("phone", "")),
-        "birthday": birthday_clean,                 # never 'nan'
-        "total_points": float(total_pts_raw or 0),
-    }
+    """Retry a few times to avoid read-after-write race from GitHub."""
+    attempts = 0
+    while attempts < 3:
+        attempts += 1
+        _, bytes_ = _get_file_info(CUSTOMERS_PATH)
+        if not bytes_:
+            if attempts < 3:
+                time.sleep(0.35)
+                continue
+            return None
+        try:
+            df = _df_from_excel_bytes(bytes_)
+        except Exception:
+            if attempts < 3:
+                time.sleep(0.35)
+                continue
+            return None
+        if "phone" not in df.columns:
+            return None
+        row = df[df["phone"].astype(str) == str(phone)]
+        if row.empty:
+            if attempts < 3:
+                time.sleep(0.35)
+                continue
+            return None
+        r = row.iloc[0]
+        birthday_clean = _normalize_birthday_out(r.get("birthday", None))
+        total_pts_raw = r.get("total_points", 0)
+        return {
+            "phone": str(r.get("phone", "")),
+            "birthday": birthday_clean,
+            "total_points": float(total_pts_raw or 0),
+        }
+    return None
 
 def save_or_update_customer(phone: str, birthday_iso: str):
     birthday_iso = _normalize_birthday_in(birthday_iso)
-
     attempts = 0
     while True:
         attempts += 1
@@ -188,24 +181,16 @@ def save_or_update_customer(phone: str, birthday_iso: str):
                 df = pd.DataFrame(columns=["phone", "birthday", "total_points"])
         else:
             df = pd.DataFrame(columns=["phone", "birthday", "total_points"])
-
         if "total_points" not in df.columns:
             df["total_points"] = 0.0
-
         phone_str = str(phone)
         mask = (df["phone"].astype(str) == phone_str)
         if mask.any():
             df.loc[mask, "birthday"] = birthday_iso or ""
         else:
-            df = pd.concat(
-                [df, pd.DataFrame([{
-                    "phone": phone_str,
-                    "birthday": birthday_iso or "",
-                    "total_points": 0.0
-                }])],
-                ignore_index=True
-            )
-
+            df = pd.concat([df, pd.DataFrame([{
+                "phone": phone_str, "birthday": birthday_iso or "", "total_points": 0.0
+            }])], ignore_index=True)
         updated = _excel_bytes_from_df(df)
         try:
             _commit_file(CUSTOMERS_PATH, updated, f"Upsert customer {phone_str}", sha=sha)
@@ -217,12 +202,10 @@ def save_or_update_customer(phone: str, birthday_iso: str):
             raise
 
 def update_customer_points(phone: str, total_points: float):
-    """Persist latest computed points into customers.xlsx (create file/column if missing)."""
     attempts = 0
     while True:
         attempts += 1
         sha, bytes_ = _get_file_info(CUSTOMERS_PATH)
-
         if bytes_:
             try:
                 df = _df_from_excel_bytes(bytes_)
@@ -230,21 +213,16 @@ def update_customer_points(phone: str, total_points: float):
                 df = pd.DataFrame(columns=["phone", "birthday", "total_points"])
         else:
             df = pd.DataFrame(columns=["phone", "birthday", "total_points"])
-
         if "total_points" not in df.columns:
             df["total_points"] = 0.0
-
         phone_str = str(phone)
         mask = (df["phone"].astype(str) == phone_str)
         if mask.any():
             df.loc[mask, "total_points"] = float(total_points)
         else:
             df = pd.concat([df, pd.DataFrame([{
-                "phone": phone_str,
-                "birthday": "",
-                "total_points": float(total_points)
+                "phone": phone_str, "birthday": "", "total_points": float(total_points)
             }])], ignore_index=True)
-
         updated_bytes = _excel_bytes_from_df(df)
         try:
             _commit_file(CUSTOMERS_PATH, updated_bytes, f"Update points {phone_str} -> {total_points:.2f}", sha=sha)
@@ -260,19 +238,9 @@ def get_customers_file_bytes() -> bytes | None:
     return bytes_
 
 # =========================
-# Payments
+# Payments / Redemptions (unchanged)
 # =========================
-def save_payment(
-    phone: str,
-    original_amount: float,
-    birthday_discount: float,
-    reward_discount: float,
-    points_redeemed: float,
-    final_amount: float,
-    method: str,
-    ts: str,
-) -> None:
-    """Append one payment row with full breakdown to payments.xlsx."""
+def save_payment(phone, original_amount, birthday_discount, reward_discount, points_redeemed, final_amount, method, ts):
     new_row = {
         "phone": str(phone),
         "original_amount": round(float(original_amount), 2),
@@ -283,7 +251,6 @@ def save_payment(
         "method": method,
         "timestamp": ts,
     }
-
     attempts = 0
     while True:
         attempts += 1
@@ -293,23 +260,18 @@ def save_payment(
                 df = _df_from_excel_bytes(bytes_)
             except Exception:
                 df = pd.DataFrame(columns=[
-                    "phone", "original_amount", "birthday_discount",
-                    "reward_discount", "points_redeemed",
-                    "final_amount", "method", "timestamp"
+                    "phone","original_amount","birthday_discount",
+                    "reward_discount","points_redeemed","final_amount","method","timestamp"
                 ])
         else:
             df = pd.DataFrame(columns=[
-                "phone", "original_amount", "birthday_discount",
-                "reward_discount", "points_redeemed",
-                "final_amount", "method", "timestamp"
+                "phone","original_amount","birthday_discount",
+                "reward_discount","points_redeemed","final_amount","method","timestamp"
             ])
-
         if "reward_discount" not in df.columns:
             df["reward_discount"] = 0.0
-
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         updated = _excel_bytes_from_df(df)
-
         try:
             _commit_file(PAYMENTS_PATH, updated, f"Add payment {new_row['phone']} ({method}) {ts}", sha=sha)
             return
@@ -332,13 +294,8 @@ def get_payments_file_bytes() -> bytes | None:
     _, bytes_ = _get_file_info(PAYMENTS_PATH)
     return bytes_
 
-# =========================
-# Redemptions (points spent)
-# =========================
 def record_redemption(phone: str, points: float, ts: str):
-    """Append a redemption (points spent) to redemptions.xlsx."""
     new_row = {"phone": str(phone), "points": round(float(points), 2), "timestamp": ts}
-
     attempts = 0
     while True:
         attempts += 1
@@ -350,10 +307,8 @@ def record_redemption(phone: str, points: float, ts: str):
                 df = pd.DataFrame(columns=["phone", "points", "timestamp"])
         else:
             df = pd.DataFrame(columns=["phone", "points", "timestamp"])
-
         df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         updated = _excel_bytes_from_df(df)
-
         try:
             _commit_file(REDEMPTIONS_PATH, updated, f"Redeem points {new_row['phone']} {new_row['points']}", sha=sha)
             return
@@ -373,7 +328,7 @@ def _load_redemptions_df() -> pd.DataFrame:
         return pd.DataFrame(columns=["phone", "points", "timestamp"])
 
 # =========================
-# Loyalty: earning, expiry, birthday discount
+# Loyalty (unchanged logic)
 # =========================
 def _parse_iso_date_only(s: str | None) -> date | None:
     if not s:
@@ -384,7 +339,6 @@ def _parse_iso_date_only(s: str | None) -> date | None:
         return None
 
 def _parse_ts_to_date(ts) -> date:
-    """Accepts ISO string/datetime/date; returns a date, defaulting to today on failure."""
     try:
         if isinstance(ts, datetime):
             return ts.date()
@@ -400,7 +354,6 @@ def _parse_ts_to_date(ts) -> date:
         return date.today()
 
 def _safe_event_date(year: int, bday: date) -> date:
-    """Return the birthday date for a given year; if Feb 29 on non‑leap year, use Feb 28."""
     try:
         return date(year, bday.month, bday.day)
     except ValueError:
@@ -409,10 +362,6 @@ def _safe_event_date(year: int, bday: date) -> date:
         raise
 
 def _in_birthday_window(purchase_dt: date, bday: date) -> bool:
-    """
-    True if purchase_dt is within [event - WINDOW_DAYS, event + BIRTHDAY_POST_WINDOW_DAYS].
-    Chooses nearest relevant event; handles year wrap and Feb-29 birthdays.
-    """
     this_year_event = _safe_event_date(purchase_dt.year, bday)
     if purchase_dt > this_year_event + timedelta(days=BIRTHDAY_POST_WINDOW_DAYS):
         event = _safe_event_date(purchase_dt.year + 1, bday)
@@ -423,37 +372,21 @@ def _in_birthday_window(purchase_dt: date, bday: date) -> bool:
     return start_window <= purchase_dt <= end_window
 
 def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, float]:
-    """
-    Return (final_amount_after_discount, discount_applied).
-    Discount applies if purchase is within WINDOW_DAYS before or
-    BIRTHDAY_POST_WINDOW_DAYS after the birthday (inclusive).
-    """
     cust = get_customer(phone)
     bday = _parse_iso_date_only(cust.get("birthday") if cust else None)
     discount_applied = 0.0
     p_dt = _parse_ts_to_date(ts)
-
     if bday and _in_birthday_window(p_dt, bday):
         discount_applied = amount * DISCOUNT_RATE
         amount -= discount_applied
-
     return round(amount, 2), round(discount_applied, 2)
 
 def calculate_points_for_amount(original_amount: float) -> float:
-    """1 point per $1 on ORIGINAL amount (pre-discount)."""
     return float(original_amount) * BASE_POINTS_PER_CURRENCY
 
 def calculate_total_points(phone: str, ref_ts: str) -> float:
-    """
-    Unexpired points at reference time:
-      balance = sum(earned within last 365 days) - sum(redeemed within last 365 days)
-      earned   -> from payments.xlsx (original_amount)
-      redeemed -> from redemptions.xlsx (points)
-    """
     ref_date = _parse_ts_to_date(ref_ts)
     cutoff = ref_date - timedelta(days=EXPIRY_DAYS)
-
-    # Earned
     p_df = _load_payments_df()
     if not p_df.empty:
         p_df = p_df[p_df["phone"].astype(str) == str(phone)].copy()
@@ -462,8 +395,6 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
         earned = float(p_df.get("original_amount", 0).sum()) * BASE_POINTS_PER_CURRENCY
     else:
         earned = 0.0
-
-    # Redeemed
     r_df = _load_redemptions_df()
     if not r_df.empty:
         r_df = r_df[r_df["phone"].astype(str) == str(phone)].copy()
@@ -472,60 +403,40 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
         redeemed = float(r_df.get("points", 0).sum())
     else:
         redeemed = 0.0
-
     balance = max(0.0, earned - redeemed)
     return round(balance, 2)
 
 # =========================
-# Admin: clear all Excel data (keep headers)
+# Admin clear helpers (unchanged)
 # =========================
 def _reset_excel(path: str, columns: list[str]) -> None:
-    """Overwrite an Excel file with an empty sheet that keeps the provided headers."""
     df = pd.DataFrame(columns=columns)
     content = _excel_bytes_from_df(df)
     sha, _ = _get_file_info(path)
     _commit_file(path, content, f"Reset {os.path.basename(path)} (clear all data)", sha=sha)
 
 def clear_all_data(include_vouchers: bool = True) -> dict:
-    """
-    Clear payments.xlsx, customers.xlsx, redemptions.xlsx (and vouchers.xlsx if present).
-    Returns a dict of file -> 'ok'/'error:...'.
-    """
     results = {}
-
-    # customers.xlsx
     try:
         _reset_excel(CUSTOMERS_PATH, ["phone", "birthday", "total_points"])
         results[os.path.basename(CUSTOMERS_PATH)] = "ok"
     except Exception as e:
         results[os.path.basename(CUSTOMERS_PATH)] = f"error: {e}"
-
-    # payments.xlsx
     try:
-        _reset_excel(
-            PAYMENTS_PATH,
-            ["phone", "original_amount", "birthday_discount",
-             "reward_discount", "points_redeemed", "final_amount",
-             "method", "timestamp"]
-        )
+        _reset_excel(PAYMENTS_PATH, ["phone","original_amount","birthday_discount","reward_discount","points_redeemed","final_amount","method","timestamp"])
         results[os.path.basename(PAYMENTS_PATH)] = "ok"
     except Exception as e:
         results[os.path.basename(PAYMENTS_PATH)] = f"error: {e}"
-
-    # redemptions.xlsx
     try:
-        _reset_excel(REDEMPTIONS_PATH, ["phone", "points", "timestamp"])
+        _reset_excel(REDEMPTIONS_PATH, ["phone","points","timestamp"])
         results[os.path.basename(REDEMPTIONS_PATH)] = "ok"
     except Exception as e:
         results[os.path.basename(REDEMPTIONS_PATH)] = f"error: {e}"
-
-    # vouchers.xlsx (optional)
     if include_vouchers:
         vouchers_path = st.secrets.get("GITHUB_VOUCHERS_PATH", os.environ.get("GITHUB_VOUCHERS_PATH", "vouchers.xlsx"))
         try:
-            _reset_excel(vouchers_path, ["voucher_code", "phone", "value", "issued_ts", "redeemed_ts"])
+            _reset_excel(vouchers_path, ["voucher_code","phone","value","issued_ts","redeemed_ts"])
             results[os.path.basename(vouchers_path)] = "ok"
         except Exception as e:
             results[os.path.basename(vouchers_path)] = f"error: {e}"
-
     return results
