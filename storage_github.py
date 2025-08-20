@@ -388,22 +388,38 @@ def _parse_ts_to_date(ts: str) -> date:
     except Exception:
         return date.today()
 
-def _in_pre_birthday_window(purchase_dt: date, bday: date) -> bool:
-    event_this_year = date(purchase_dt.year, bday.month, bday.day)
-    start_window = event_this_year - timedelta(days=WINDOW_DAYS)
-    return start_window <= purchase_dt < event_this_year
+# --- NEW robust birthday window helpers ---
+def _safe_event_date(year: int, bday: date) -> date:
+    """Return the birthday date for a given year; if Feb 29 on non‑leap year, use Feb 28."""
+    try:
+        return date(year, bday.month, bday.day)
+    except ValueError:
+        if bday.month == 2 and bday.day == 29:
+            return date(year, 2, 28)
+        raise
+
+def _in_birthday_window(purchase_dt: date, bday: date) -> bool:
+    """
+    True if purchase_dt is within WINDOW_DAYS *before* the NEXT occurrence of the birthday,
+    including the birthday day itself. Handles year wrap and Feb‑29 birthdays.
+    """
+    event = _safe_event_date(purchase_dt.year, bday)
+    if event < purchase_dt:
+        event = _safe_event_date(purchase_dt.year + 1, bday)
+    start_window = event - timedelta(days=WINDOW_DAYS)
+    return start_window <= purchase_dt <= event
 
 def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, float]:
     """
     Return (final_amount_after_discount, discount_applied).
-    Discount applies if purchase is within WINDOW_DAYS **before** birthday.
+    Discount applies if purchase is within WINDOW_DAYS before the next birthday (or on the day).
     """
     cust = get_customer(phone)
     bday = _parse_iso_date_only(cust.get("birthday") if cust else None)
     discount_applied = 0.0
     p_dt = _parse_ts_to_date(ts)
 
-    if bday and _in_pre_birthday_window(p_dt, bday):
+    if bday and _in_birthday_window(p_dt, bday):
         discount_applied = amount * DISCOUNT_RATE
         amount -= discount_applied
 
