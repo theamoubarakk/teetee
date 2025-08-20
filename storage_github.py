@@ -28,9 +28,10 @@ REWARD_TIERS = [(100, 5), (250, 15), (500, 40)]
 
 # Loyalty config
 BASE_POINTS_PER_CURRENCY = 1.0  # 1 point per 1 currency unit
-WINDOW_DAYS = 7                 # pre-birthday discount window (days before)
-DISCOUNT_RATE = 0.15            # 15% birthday discount
-EXPIRY_DAYS = 365               # points expire after 1 year
+WINDOW_DAYS = 7                  # days BEFORE birthday
+BIRTHDAY_POST_WINDOW_DAYS = 7    # days AFTER birthday (new)
+DISCOUNT_RATE = 0.15              # 15% birthday discount
+EXPIRY_DAYS = 365                 # points expire after 1 year
 
 # =========================
 # GitHub helpers
@@ -84,7 +85,9 @@ def _commit_file(path: str, content_bytes: bytes, message: str, sha: str | None)
     elif r.status_code == 422:
         hint.append("422 — branch may not exist, or SHA mismatch for update.")
         hint.append(f"Check branch '{BRANCH}' exists and path '{path}' is correct.")
-    raise RuntimeError(f"GitHub PUT {path} failed: {r.status_code} {r.text}\n" + "\n".join(hint))
+
+    # robust single f-string (avoid accidental str + int concatenation)
+    raise RuntimeError(f"GitHub PUT {path} failed: {r.status_code} {r.text}\n" + "\n".join(map(str, hint)))
 
 # =========================
 # Excel helpers
@@ -382,13 +385,25 @@ def _parse_iso_date_only(s: str | None) -> date | None:
     except Exception:
         return None
 
-def _parse_ts_to_date(ts: str) -> date:
+def _parse_ts_to_date(ts) -> date:
+    """
+    Accepts ISO string 'YYYY-MM-DDTHH:MM:SS', datetime/date, or anything castable to str.
+    Always returns a date, defaulting to today on failure.
+    """
     try:
-        return datetime.fromisoformat(ts[:19]).date()
+        if isinstance(ts, datetime):
+            return ts.date()
+        if isinstance(ts, date):
+            return ts
+        s = str(ts)
+        s19 = s[:19]
+        try:
+            return datetime.fromisoformat(s19.replace(" ", "T")).date()
+        except Exception:
+            return date.fromisoformat(s[:10])
     except Exception:
         return date.today()
 
-# --- NEW robust birthday window helpers ---
 def _safe_event_date(year: int, bday: date) -> date:
     """Return the birthday date for a given year; if Feb 29 on non‑leap year, use Feb 28."""
     try:
@@ -400,19 +415,23 @@ def _safe_event_date(year: int, bday: date) -> date:
 
 def _in_birthday_window(purchase_dt: date, bday: date) -> bool:
     """
-    True if purchase_dt is within WINDOW_DAYS *before* the NEXT occurrence of the birthday,
-    including the birthday day itself. Handles year wrap and Feb‑29 birthdays.
+    True if purchase_dt is within [event - WINDOW_DAYS, event + BIRTHDAY_POST_WINDOW_DAYS].
+    Chooses nearest relevant event; handles year wrap and Feb-29 birthdays.
     """
-    event = _safe_event_date(purchase_dt.year, bday)
-    if event < purchase_dt:
+    this_year_event = _safe_event_date(purchase_dt.year, bday)
+    if purchase_dt > this_year_event + timedelta(days=BIRTHDAY_POST_WINDOW_DAYS):
         event = _safe_event_date(purchase_dt.year + 1, bday)
+    else:
+        event = this_year_event
     start_window = event - timedelta(days=WINDOW_DAYS)
-    return start_window <= purchase_dt <= event
+    end_window   = event + timedelta(days=BIRTHDAY_POST_WINDOW_DAYS)
+    return start_window <= purchase_dt <= end_window
 
 def apply_birthday_discount(phone: str, amount: float, ts: str) -> tuple[float, float]:
     """
     Return (final_amount_after_discount, discount_applied).
-    Discount applies if purchase is within WINDOW_DAYS before the next birthday (or on the day).
+    Discount applies if purchase is within WINDOW_DAYS before or
+    BIRTHDAY_POST_WINDOW_DAYS after the birthday (inclusive).
     """
     cust = get_customer(phone)
     bday = _parse_iso_date_only(cust.get("birthday") if cust else None)
@@ -443,7 +462,7 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
     p_df = _load_payments_df()
     if not p_df.empty:
         p_df = p_df[p_df["phone"].astype(str) == str(phone)].copy()
-        p_df["date"] = p_df["timestamp"].astype(str).str[:19].apply(_parse_ts_to_date)
+        p_df["date"] = p_df["timestamp"].apply(_parse_ts_to_date)
         p_df = p_df[p_df["date"] >= cutoff]
         earned = float(p_df.get("original_amount", 0).sum()) * BASE_POINTS_PER_CURRENCY
     else:
@@ -453,7 +472,7 @@ def calculate_total_points(phone: str, ref_ts: str) -> float:
     r_df = _load_redemptions_df()
     if not r_df.empty:
         r_df = r_df[r_df["phone"].astype(str) == str(phone)].copy()
-        r_df["date"] = r_df["timestamp"].astype(str).str[:19].apply(_parse_ts_to_date)
+        r_df["date"] = r_df["timestamp"].apply(_parse_ts_to_date)
         r_df = r_df[r_df["date"] >= cutoff]
         redeemed = float(r_df.get("points", 0).sum())
     else:
