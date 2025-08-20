@@ -4,7 +4,6 @@ import storage_github as storage
 
 st.title("Loyalty Program")
 
-
 # ---- helpers ----
 def _fmt_birthday(value):
     if not value:
@@ -31,38 +30,53 @@ st.session_state.setdefault("edit_birthday", False)
 st.session_state.setdefault("just_saved_phone", None)
 st.session_state.setdefault("just_saved_birthday", None)
 
-# ---- Step 1: phone capture ----
-phone = st.text_input("Enter your phone number (exactly 8 digits):", value=st.session_state["phone"])
-if st.button("Next"):
-    if re.fullmatch(r"\d{8}", phone):
-        st.session_state["phone_valid"] = True
-        st.session_state["phone"] = phone
-    else:
-        st.session_state["phone_valid"] = False
-        st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
+# =========================
+# Step 1: phone capture (hidden once valid)
+# =========================
+if not st.session_state["phone_valid"]:
+    phone = st.text_input("Enter your phone number (exactly 8 digits):", value=st.session_state["phone"])
+    if st.button("Next"):
+        if re.fullmatch(r"\d{8}", phone):
+            st.session_state["phone_valid"] = True
+            st.session_state["phone"] = phone
+            st.rerun()
+        else:
+            st.session_state["phone_valid"] = False
+            st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
+else:
+    # Compact header showing the locked-in phone and a way to change it
+    col_p1, col_p2 = st.columns([1, 0.25])
+    with col_p1:
+        st.caption(f"Phone: **{st.session_state['phone']}**")
+    with col_p2:
+        if st.button("Change number"):
+            # reset state so the phone input shows again
+            st.session_state["phone_valid"] = False
+            st.session_state["edit_birthday"] = False
+            st.session_state["just_saved_phone"] = None
+            st.session_state["just_saved_birthday"] = None
+            st.rerun()
 
-# ---- Step 1.5: profile (set or edit birthday) ----
+# =========================
+# Step 1.5: profile (set or edit birthday)
+# =========================
 customer = None
 if st.session_state["phone_valid"]:
     phone_id = st.session_state["phone"]
 
-    # Try to load from GitHub
+    # Load from GitHub
     try:
         customer = storage.get_customer(phone_id)
     except Exception as e:
         st.error(f"Failed to load customer profile: {e}")
 
-    # If GitHub hasn't propagated yet, fall back to optimistic cache
+    # Use optimistic cache if a save just happened
     cached_bday = st.session_state["just_saved_birthday"] if st.session_state["just_saved_phone"] == phone_id else None
-
-    # Unified "effective" view of birthday (cache wins if present)
     effective_bday_iso = cached_bday or (customer.get("birthday") if customer else None)
-
-    # Decide whether this is truly a brand‑new customer (no cached birthday either)
     is_really_new = (customer is None) and (cached_bday is None)
 
     if is_really_new:
-        # Brand-new → show creation form and persist immediately
+        # BRAND‑NEW → show only the notice + date input (no phone box)
         st.info("New customer detected. Please add a birthday.")
         dob = st.date_input(
             "Birthday (required)",
@@ -77,7 +91,7 @@ if st.session_state["phone_valid"]:
                 try:
                     storage.save_or_update_customer(phone=phone_id, birthday_iso=dob.isoformat())
                     storage.update_customer_points(phone_id, 0.0)
-                    # optimistic cache so next render shows it even if GitHub lags
+                    # optimistic cache to cover GitHub propagation lag
                     st.session_state["just_saved_phone"] = phone_id
                     st.session_state["just_saved_birthday"] = dob.isoformat()
                     st.success("Profile saved.")
@@ -85,16 +99,14 @@ if st.session_state["phone_valid"]:
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # We have an effective birthday (from GitHub or cache) → show as existing profile
+        # EXISTING (or just-saved) → show caption and optional editor
         st.caption(f"Profile → Birthday: {_fmt_birthday(effective_bday_iso)}")
 
-        # If missing (edge case), open editor by default
         if not effective_bday_iso and not st.session_state["edit_birthday"]:
             st.warning("No birthday saved yet for this customer.")
             st.session_state["edit_birthday"] = True
 
-        # Edit controls
-        col_a, _ = st.columns([1,1])
+        col_a, _ = st.columns([1, 1])
         with col_a:
             if not st.session_state["edit_birthday"]:
                 if st.button("Edit Birthday"):
@@ -109,12 +121,11 @@ if st.session_state["phone_valid"]:
                 max_value=date.today(),
                 key="edit_bday"
             )
-            c1, c2 = st.columns([1,1])
+            c1, c2 = st.columns([1, 1])
             with c1:
                 if st.button("Save Birthday"):
                     try:
                         storage.save_or_update_customer(phone=phone_id, birthday_iso=new_dob.isoformat())
-                        # update optimistic cache and close editor
                         st.session_state["just_saved_phone"] = phone_id
                         st.session_state["just_saved_birthday"] = new_dob.isoformat()
                         st.session_state["edit_birthday"] = False
@@ -126,7 +137,9 @@ if st.session_state["phone_valid"]:
                 if st.button("Cancel"):
                     st.session_state["edit_birthday"] = False
 
-# ---- Step 2: payment (birthday discount + optional reward discount) ----
+# =========================
+# Step 2: payment (birthday discount + reward discount)
+# =========================
 if st.session_state["phone_valid"]:
     try:
         ts_now = datetime.now().isoformat(timespec="seconds")
@@ -140,6 +153,7 @@ if st.session_state["phone_valid"]:
     amount = st.number_input("Enter payment amount:", min_value=0.01, step=0.01, format="%.2f")
     method = st.selectbox("Payment Method", ["Cash", "Check", "Credit Card"])
 
+    # Rewards picker (label without '(optional)')
     eligible = [(c, cash) for (c, cash) in storage.REWARD_TIERS if current_pts_for_ui >= c]
     reward_label_map = {"No reward": (0, 0.0)}
     for cost, cash in eligible:
@@ -154,13 +168,16 @@ if st.session_state["phone_valid"]:
             try:
                 ts = datetime.now().isoformat(timespec="seconds")
 
+                # 1) Birthday discount first
                 after_bday, bday_discount = storage.apply_birthday_discount(
                     phone=st.session_state["phone"], amount=float(amount), ts=ts
                 )
 
+                # 2) Current points
                 current_points = storage.calculate_total_points(st.session_state["phone"], ts)
                 storage.update_customer_points(st.session_state["phone"], current_points)
 
+                # 3) Reward discount (cash off) if selected and enough points
                 reward_discount = 0.0
                 points_spent_for_reward = 0.0
                 if sel_cost > 0 and current_points >= sel_cost:
@@ -169,8 +186,10 @@ if st.session_state["phone_valid"]:
                         points_spent_for_reward = float(sel_cost)
                         storage.record_redemption(st.session_state["phone"], points_spent_for_reward, ts)
 
+                # 4) Final amount after discounts
                 amount_due = max(0.0, round(after_bday - reward_discount, 2))
 
+                # 5) Save payment
                 storage.save_payment(
                     phone=st.session_state["phone"],
                     original_amount=float(amount),
@@ -182,10 +201,12 @@ if st.session_state["phone_valid"]:
                     ts=ts,
                 )
 
+                # 6) Update points
                 earned = storage.calculate_points_for_amount(float(amount))
                 new_balance = max(0.0, current_points - points_spent_for_reward + earned)
                 storage.update_customer_points(st.session_state["phone"], new_balance)
 
+                # 7) UI feedback
                 st.caption(
                     f"Birthday discount: {bday_discount:.2f} | "
                     f"Reward discount: {reward_discount:.2f} | "
