@@ -55,7 +55,7 @@ if st.session_state["phone_valid"]:
     phone_id = st.session_state["phone"]
 
     if customer is None:
-        # New customer → must set birthday once
+        # New customer → set birthday and persist immediately
         st.info("New customer detected. Please add a birthday.")
         dob = st.date_input(
             "Birthday (required)",
@@ -68,12 +68,12 @@ if st.session_state["phone_valid"]:
                 st.error("Birthday is required.")
             else:
                 try:
+                    # persist to Excel right away so next render sees it
                     storage.save_or_update_customer(phone=phone_id, birthday_iso=dob.isoformat())
                     storage.update_customer_points(phone_id, 0.0)
                     st.session_state["profile_saved"] = True
                     st.success("Profile saved.")
-                    # 🔁 force reload so get_customer sees the newly saved birthday immediately
-                    st.rerun()
+                    st.rerun()  # <- critical: reload to show saved birthday immediately
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
@@ -108,8 +108,7 @@ if st.session_state["phone_valid"]:
                         storage.save_or_update_customer(phone=phone_id, birthday_iso=new_dob.isoformat())
                         st.session_state["edit_birthday"] = False
                         st.success("Birthday saved.")
-                        # 🔁 force reload so the caption shows the saved date immediately
-                        st.rerun()
+                        st.rerun()  # <- critical: reload to show saved date immediately
                     except Exception as e:
                         st.error(f"Failed to save birthday: {e}")
             with c2:
@@ -167,7 +166,7 @@ if st.session_state["phone_valid"]:
                 reward_discount = 0.0
                 points_spent_for_reward = 0.0
                 if sel_cost > 0 and current_points >= sel_cost:
-                    reward_discount = min(sel_cash, after_bday)  # cannot exceed amount due after birthday discount
+                    reward_discount = min(sel_cash, after_bday)
                     if reward_discount > 0:
                         points_spent_for_reward = float(sel_cost)
                         storage.record_redemption(
@@ -182,10 +181,10 @@ if st.session_state["phone_valid"]:
                 # 5) Save payment (includes reward_discount column)
                 storage.save_payment(
                     phone=st.session_state["phone"],
-                    original_amount=float(amount),    # earn points on original amount
+                    original_amount=float(amount),
                     birthday_discount=bday_discount,
-                    reward_discount=reward_discount,          # NEW COLUMN
-                    points_redeemed=points_spent_for_reward,  # points spent to get reward
+                    reward_discount=reward_discount,
+                    points_redeemed=points_spent_for_reward,
                     final_amount=amount_due,
                     method=method,
                     ts=ts,
@@ -237,10 +236,8 @@ with st.expander("Admin • Clear all data"):
     if st.button("Clear ALL data now", type="primary", disabled=not confirm):
         try:
             results = storage.clear_all_data(include_vouchers=include_vouchers)
-            # Reset local session bits that might show old values
             st.session_state["profile_saved"] = False
             st.session_state["edit_birthday"] = False
-            # Show outcome
             lines = [f"- {k}: {v}" for k, v in results.items()]
             st.success("Data cleared.\n\n" + "\n".join(lines))
         except Exception as e:
