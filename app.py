@@ -2,7 +2,8 @@ from deps import st, re, datetime
 from datetime import date
 import storage_github as storage
 
-st.title("Payment Entry + Loyalty (Points + Reward Discount)")
+st.title("Loyalty Program")
+
 
 # ---- helpers ----
 def _fmt_birthday(value):
@@ -143,7 +144,7 @@ if st.session_state["phone_valid"]:
     reward_label_map = {"No reward": (0, 0.0)}
     for cost, cash in eligible:
         reward_label_map[f"{cost} pts → ${cash} off"] = (cost, float(cash))
-    choice = st.selectbox("Apply reward discount (optional)", list(reward_label_map.keys()))
+    choice = st.selectbox("Apply reward discount", list(reward_label_map.keys()))
     sel_cost, sel_cash = reward_label_map[choice]
 
     if st.button("Submit Payment"):
