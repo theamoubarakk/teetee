@@ -222,3 +222,22 @@ if all(k in st.secrets for k in required):
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             help="Download the latest customers.xlsx (includes total points per phone)"
         )
+
+# ---- Admin: Clear all data ----
+st.divider()
+with st.expander("Admin • Clear all data"):
+    st.warning("This will erase all rows in customers.xlsx, payments.xlsx, redemptions.xlsx (and vouchers.xlsx if present), keeping only headers.")
+    confirm = st.checkbox("I understand this action is irreversible.", value=False)
+    include_vouchers = st.checkbox("Also clear vouchers.xlsx (if present)", value=True)
+
+    if st.button("Clear ALL data now", type="primary", disabled=not confirm):
+        try:
+            results = storage.clear_all_data(include_vouchers=include_vouchers)
+            # Reset local session bits that might show old values
+            st.session_state["profile_saved"] = False
+            st.session_state["edit_birthday"] = False
+            # Show outcome
+            lines = [f"- {k}: {v}" for k, v in results.items()]
+            st.success("Data cleared.\n\n" + "\n".join(lines))
+        except Exception as e:
+            st.error(f"Failed to clear data: {e}")
