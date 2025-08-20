@@ -4,6 +4,15 @@ import storage_github as storage
 
 st.title("Payment Entry + Loyalty (Points + Reward Discount)")
 
+# ---- tiny helper to format birthday safely (never shows 'nan') ----
+def _fmt_birthday(value):
+    if not value:
+        return "—"
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").strftime("%d %b %Y")
+    except Exception:
+        return "—"
+
 # ---- session init ----
 if "phone_valid" not in st.session_state:
     st.session_state["phone_valid"] = False
@@ -55,7 +64,8 @@ if st.session_state["phone_valid"]:
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        st.caption(f"Profile → Birthday: {customer.get('birthday','-')}")
+        # use safe formatter (never prints 'nan')
+        st.caption(f"Profile → Birthday: {_fmt_birthday(customer.get('birthday'))}")
 
 # ---- Step 2: payment (birthday discount + optional reward discount) ----
 if st.session_state["phone_valid"]:
