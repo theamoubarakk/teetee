@@ -72,6 +72,8 @@ if st.session_state["phone_valid"]:
                     storage.update_customer_points(phone_id, 0.0)
                     st.session_state["profile_saved"] = True
                     st.success("Profile saved.")
+                    # 🔁 force reload so get_customer sees the newly saved birthday immediately
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
@@ -106,6 +108,8 @@ if st.session_state["phone_valid"]:
                         storage.save_or_update_customer(phone=phone_id, birthday_iso=new_dob.isoformat())
                         st.session_state["edit_birthday"] = False
                         st.success("Birthday saved.")
+                        # 🔁 force reload so the caption shows the saved date immediately
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Failed to save birthday: {e}")
             with c2:
