@@ -13,6 +13,14 @@ def _fmt_birthday(value):
     except Exception:
         return "—"
 
+def _iso_to_date_or_none(val):
+    if not val:
+        return None
+    try:
+        return datetime.strptime(str(val)[:10], "%Y-%m-%d").date()
+    except Exception:
+        return None
+
 # ---- session init ----
 if "phone_valid" not in st.session_state:
     st.session_state["phone_valid"] = False
@@ -20,6 +28,8 @@ if "phone" not in st.session_state:
     st.session_state["phone"] = ""
 if "profile_saved" not in st.session_state:
     st.session_state["profile_saved"] = False
+if "edit_birthday" not in st.session_state:
+    st.session_state["edit_birthday"] = False
 
 # ---- Step 1: phone capture ----
 phone = st.text_input(
@@ -30,12 +40,11 @@ if st.button("Next"):
     if re.fullmatch(r"\d{8}", phone):
         st.session_state["phone_valid"] = True
         st.session_state["phone"] = phone
-        # no success/green box
     else:
         st.session_state["phone_valid"] = False
         st.error("Invalid phone number. Please enter exactly 8 digits (0–9).")
 
-# ---- Step 1.5: profile (birthday once) ----
+# ---- Step 1.5: profile (set or edit birthday) ----
 customer = None
 if st.session_state["phone_valid"]:
     try:
@@ -43,29 +52,65 @@ if st.session_state["phone_valid"]:
     except Exception as e:
         st.error(f"Failed to load customer profile: {e}")
 
+    phone_id = st.session_state["phone"]
+
     if customer is None:
+        # New customer → must set birthday once
         st.info("New customer detected. Please add a birthday.")
         dob = st.date_input(
             "Birthday (required)",
             min_value=date(1960, 1, 1),
-            max_value=date.today()
+            max_value=date.today(),
+            key="new_bday"
         )
         if st.button("Save Profile"):
             if dob is None:
                 st.error("Birthday is required.")
             else:
                 try:
-                    storage.save_or_update_customer(
-                        phone=st.session_state["phone"],
-                        birthday_iso=dob.isoformat(),
-                    )
-                    storage.update_customer_points(st.session_state["phone"], 0.0)
+                    storage.save_or_update_customer(phone=phone_id, birthday_iso=dob.isoformat())
+                    storage.update_customer_points(phone_id, 0.0)
                     st.session_state["profile_saved"] = True
+                    st.success("Profile saved.")
                 except Exception as e:
                     st.error(f"Failed to save profile: {e}")
     else:
-        # use safe formatter (never prints 'nan')
-        st.caption(f"Profile → Birthday: {_fmt_birthday(customer.get('birthday'))}")
+        # Existing customer
+        current_bday_iso = customer.get("birthday")
+        st.caption(f"Profile → Birthday: {_fmt_birthday(current_bday_iso)}")
+
+        # If birthday missing, prompt to set it; if present, allow edit
+        if not current_bday_iso and not st.session_state["edit_birthday"]:
+            st.warning("No birthday saved yet for this customer.")
+            st.session_state["edit_birthday"] = True
+
+        col_a, col_b = st.columns([1,1])
+        with col_a:
+            if not st.session_state["edit_birthday"]:
+                if st.button("Edit Birthday"):
+                    st.session_state["edit_birthday"] = True
+
+        if st.session_state["edit_birthday"]:
+            default_date = _iso_to_date_or_none(current_bday_iso) or date(2000, 1, 1)
+            new_dob = st.date_input(
+                "Set/Update Birthday",
+                value=default_date,
+                min_value=date(1960, 1, 1),
+                max_value=date.today(),
+                key="edit_bday"
+            )
+            c1, c2 = st.columns([1,1])
+            with c1:
+                if st.button("Save Birthday"):
+                    try:
+                        storage.save_or_update_customer(phone=phone_id, birthday_iso=new_dob.isoformat())
+                        st.session_state["edit_birthday"] = False
+                        st.success("Birthday saved.")
+                    except Exception as e:
+                        st.error(f"Failed to save birthday: {e}")
+            with c2:
+                if st.button("Cancel"):
+                    st.session_state["edit_birthday"] = False
 
 # ---- Step 2: payment (birthday discount + optional reward discount) ----
 if st.session_state["phone_valid"]:
@@ -121,7 +166,6 @@ if st.session_state["phone_valid"]:
                     reward_discount = min(sel_cash, after_bday)  # cannot exceed amount due after birthday discount
                     if reward_discount > 0:
                         points_spent_for_reward = float(sel_cost)
-                        # record points spent so balance math stays correct
                         storage.record_redemption(
                             phone=st.session_state["phone"],
                             points=points_spent_for_reward,
